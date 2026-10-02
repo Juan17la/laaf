@@ -1,98 +1,299 @@
-# Alex_PS2_Base.py: PS2-era (Silent Hill style) low-poly Alex. Bald, 8 heads tall, shoulders 2 heads wide,
-# fingertips at mid-thigh. Body = lofted octagonal cross-sections (shaped, not boxes), flat-shaded, 4 materials.
+# Alex_PS2_Base.py: Alex Moreno, rounded low-poly character (late-PS2 / GTA-SA era), textured, with 3D hair.
+# Look matches the old Alex: ash-blonde swept hair, blue eyes, clean-shaven, grimy white tee, baggy black jeans, worn sneakers.
+# 8 heads tall (2.0 m), shoulders 2 heads wide (arms outer edge x=+-0.25), fingertips at mid-thigh (z=0.75).
+# Body = lofted rounded cross-sections. Face/skin/cloth/hair textures are painted procedurally (numpy) and embedded in the GLB.
 import bpy, bmesh, math, os
-from mathutils import Matrix
+import numpy as np
+from mathutils import Vector
 
-H = 0.25                                  # 1 head = 0.25 m -> 8H = 2.0 m
-N = 8                                     # verts per ring (octagon, rotated so faces are flat front/back/sides)
-K = 1 / math.cos(math.pi / N)             # makes the flat sides land exactly on the nominal radius
-MATS = {"skin": (0.62, 0.45, 0.36), "sweater": (0.16, 0.17, 0.15),
-        "pants": (0.08, 0.08, 0.10), "boots": (0.05, 0.04, 0.035)}
-IDX = {k: i for i, k in enumerate(MATS)}
+H = 0.25
+OUT_DIR = bpy.path.abspath("//") if bpy.data.filepath else os.path.dirname(os.path.abspath(__file__))
+MAX_TRIS = 6000
 
 bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete()
 bm = bmesh.new()
+UV = bm.loops.layers.uv.verify()
+MATS = ["face", "skin", "tee", "jeans", "sneaker", "sole", "hair"]
+MI = {m: i for i, m in enumerate(MATS)}
 
-def ring(z, rx, ry, cx=0.0, cy=0.0):
-    return [bm.verts.new((cx + rx * K * math.cos((k + .5) * 2 * math.pi / N),
-                          cy + ry * K * math.sin((k + .5) * 2 * math.pi / N), z)) for k in range(N)]
+# ------------------------------------------------------------------ geometry helpers
+def ring_pts(z, rx, ry, cx=0.0, cy=0.0, n=12):
+    k = 1 / math.cos(math.pi / n)   # flat sides land on the nominal radius
+    return [Vector((cx + rx * k * math.cos((i + .5) * 2 * math.pi / n),
+                    cy + ry * k * math.sin((i + .5) * 2 * math.pi / n), z)) for i in range(n)]
 
-def loft(rings, mat, x=0.0, y=0.0):
-    """rings: (z, rx, ry[, cy]) bottom to top, capped both ends. x,y offset the whole tube."""
-    start = len(bm.faces)
-    rs = [ring(r[0], r[1], r[2], x, y + (r[3] if len(r) > 3 else 0)) for r in rings]
-    for a, b in zip(rs, rs[1:]):
-        for k in range(N):
-            bm.faces.new((a[k], a[(k + 1) % N], b[(k + 1) % N], b[k]))
-    bm.faces.new(rs[0][::-1]); bm.faces.new(rs[-1])
-    bm.faces.ensure_lookup_table()
-    for f in bm.faces[start:]:
-        f.material_index = IDX[mat]
+def loft_pts(rows, mat, tile=(1, 1), cap_bottom=True, cap_top=True):
+    """rows: list of rings (lists of Vector), bottom to top. Quads between rings + caps. UVs: u around, v along (0..1)."""
+    n = len(rows[0])
+    vr = [[bm.verts.new(p) for p in r] for r in rows]
+    cum = [0.0]
+    for a, b in zip(rows, rows[1:]):
+        cum.append(cum[-1] + (sum(b, Vector()) / n - sum(a, Vector()) / n).length)
+    tot = cum[-1] or 1.0
+    new = []
+    for j in range(len(vr) - 1):
+        for k in range(n):
+            f = bm.faces.new((vr[j][k], vr[j][(k + 1) % n], vr[j + 1][(k + 1) % n], vr[j + 1][k]))
+            u0, u1 = k / n * tile[0], (k + 1) / n * tile[0]
+            v0, v1 = cum[j] / tot * tile[1], cum[j + 1] / tot * tile[1]
+            for l, uv in zip(f.loops, ((u0, v0), (u1, v0), (u1, v1), (u0, v1))):
+                l[UV].uv = uv
+            new.append(f)
+    for ok, ring, rev in ((cap_bottom, vr[0], True), (cap_top, vr[-1], False)):
+        if ok:
+            f = bm.faces.new(ring[::-1] if rev else ring)
+            for i, l in enumerate(f.loops):
+                a = i / n * 2 * math.pi
+                l[UV].uv = (0.5 + 0.4 * math.cos(a), 0.5 + 0.4 * math.sin(a))
+            new.append(f)
+    for f in new:
+        f.material_index = MI[mat]
+    return new
 
-def block(cx, cy, cz, sx, sy, sz, mat):
-    start = len(bm.faces)
-    bmesh.ops.create_cube(bm, size=1.0, matrix=Matrix.LocRotScale((cx, cy, cz), None, (sx, sy, sz)))
-    bm.faces.ensure_lookup_table()
-    for f in bm.faces[start:]:
-        f.material_index = IDX[mat]
+def loft(rings, mat, x=0.0, y=0.0, n=12, tile=(1, 1)):
+    """rings: (z, rx, ry[, cy]) bottom to top, centred at (x, y)."""
+    return loft_pts([ring_pts(r[0], r[1], r[2], x, y + (r[3] if len(r) > 3 else 0), n) for r in rings], mat, tile)
 
-CHIN, SHOULD, CROTCH, HAND_Z = 7 * H, 6.5 * H, 4 * H, 3 * H
+def tube(path, radii, mat, n=6, flat=1.0, tile=(1, 1)):
+    """Tapered round tube along a polyline of (x,y,z) points (used for hair locks)."""
+    pts = [Vector(p) for p in path]
+    rows = []
+    for i, p in enumerate(pts):
+        t = (pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)]).normalized()
+        helper = Vector((0, 0, 1)) if abs(t.z) < 0.9 else Vector((1, 0, 0))
+        side = t.cross(helper).normalized()
+        up = t.cross(side)                                   # side x up = t -> outward normals
+        r = radii[i]
+        rows.append([p + side * (r * math.cos(a)) + up * (r * flat * math.sin(a))
+                     for a in (j * 2 * math.pi / n for j in range(n))])
+    return loft_pts(rows, mat, tile)
 
-# ---- Torso: baggy sweater, hem flare, broad sloped shoulders ----
-loft([(0.90, .190, .130), (1.00, .175, .120), (1.15, .160, .110), (1.38, .185, .125),
-      (1.54, .215, .120), (1.61, .120, .085)], "sweater")
-loft([(CHIN - .02, .047, .047), (SHOULD - .01, .055, .055)], "skin")               # neck
+# ------------------------------------------------------------------ the body (z up, faces -y)
+CHIN = 7 * H; SHOULD = 6.5 * H; HAND_Z = 3 * H
 
-# ---- Arms: baggy sleeves, bare hands. Outer edge at x=0.25 (= shoulders 2 heads wide) ----
-AX = 0.195
+# Torso: white tee, baggy hem, rounded chest, sloped shoulders
+loft([(0.90, .188, .127), (0.95, .184, .126), (1.06, .170, .118), (1.18, .160, .112), (1.30, .170, .118),
+      (1.40, .186, .126), (1.50, .200, .124), (1.59, .222, .116), (1.63, .190, .100), (1.66, .100, .075),
+      (1.675, .070, .062)], "tee", n=14, tile=(2, 2))
+loft([(1.64, .082, .070), (1.665, .086, .073), (1.685, .076, .065)], "tee", n=14, tile=(2, 0.3))   # crew collar
+loft([(1.61, .064, .064), (1.69, .057, .058), (1.77, .056, .060)], "skin", n=10)                 # neck
+
+AX = 0.185                                                       # arm centre; outer edge = 0.25 (2 heads wide in total)
 for s in (-1, 1):
-    loft([(0.86, .062, .060), (1.00, .052, .050), (1.20, .054, .052), (1.42, .058, .058),
-          (1.58, .062, .060)], "sweater", x=s * AX)
-    loft([(HAND_Z, .020, .016), (0.79, .036, .020), (0.84, .040, .024), (0.87, .030, .020)], "skin", x=s * AX)
+    loft([(0.90, .032, .026), (0.98, .040, .034), (1.10, .045, .045, -.006), (1.20, .048, .048, -.010),
+          (1.32, .054, .054, -.004), (1.47, .058, .058), (1.61, .060, .060)], "skin", x=s * AX, n=10)
+    loft([(0.75, .012, .010), (0.78, .026, .020), (0.83, .034, .024), (0.93, .031, .025)], "skin", x=s * AX, n=10)  # hand
+    loft([(1.30, .066, .066), (1.40, .068, .068), (1.50, .068, .067), (1.60, .066, .064), (1.64, .056, .054), (1.665, .030, .030)], "tee", x=s * AX, n=12)    # short sleeve
 
-# ---- Legs: baggy pants bunching over boots ----
+# Hips + legs: baggy black jeans pooling over sneakers
+loft([(0.78, .120, .095), (0.83, .160, .110), (0.88, .176, .120), (0.95, .174, .116), (0.99, .150, .106)], "jeans", n=14)
 LX = 0.09
 for s in (-1, 1):
-    loft([(0.13, .105, .105), (0.30, .092, .095), (0.52, .088, .092), (0.75, .092, .098),
-          (CROTCH - .04, .092, .105)], "pants", x=s * LX)
-    loft([(0.0, .062, .125, -.045), (0.05, .062, .125, -.045), (0.11, .060, .090, -.01),
-          (0.15, .060, .085, 0)], "boots", x=s * LX)
+    loft([(0.12, .098, .105), (0.20, .088, .092), (0.32, .084, .090), (0.46, .082, .088), (0.58, .088, .094),
+          (0.72, .094, .100), (0.84, .098, .104), (0.93, .098, .106)], "jeans", x=s * LX, n=12)
+    loft([(0.0, .066, .130, -.045), (0.03, .066, .130, -.045)], "sole", x=s * LX, n=12)
+    loft([(0.03, .060, .126, -.045), (0.07, .063, .124, -.044), (0.11, .057, .100, -.030), (0.15, .052, .075, -.006)],
+         "sneaker", x=s * LX, n=12)
 
-# ---- Head: egg-shaped, tapered jaw, brow ridge. Flat front face for painted texture. NO HAIR. ----
-loft([(CHIN,        .040, .050),            # chin
-      (CHIN + .04,  .075, .080),            # jaw
-      (CHIN + .10,  .092, .092),            # cheeks
-      (CHIN + .17,  .096, .100, -.006),     # brow (juts forward)
-      (CHIN + .22,  .085, .092),            # forehead
-      (CHIN + .25,  .050, .060)],           # crown (flat top, bald)
-     "skin")
-# nose wedge on the flat face + ears (tiny, skin coloured)
-yf = -0.093
-t, bl, br, tip = (bm.verts.new(c) for c in ((0, yf, 1.87), (-.014, yf, 1.83), (.014, yf, 1.83), (0, yf - .028, 1.835)))
-start = len(bm.faces)
-for tri in ((tip, bl, br), (t, bl, tip), (t, tip, br), (t, br, bl)):
-    bm.faces.new(tri)
-bm.faces.ensure_lookup_table()
-for f in bm.faces[start:]:
-    f.material_index = IDX["skin"]
+# Head: rounded skull, jaw, brow, flat-ish face for the texture. n=16 for a smoother silhouette.
+HP = [(1.750, .028, .038, -.030), (1.765, .055, .062, -.020), (1.790, .076, .082, -.010), (1.830, .088, .092, -.004),
+      (1.875, .094, .098, -.002), (1.905, .096, .101, -.006), (1.945, .093, .098, -.002), (1.980, .074, .082, .003),
+      (2.000, .036, .046, .005)]
+HN = 16
+def headp(z):
+    zs = [h[0] for h in HP]
+    return tuple(float(np.interp(z, zs, [h[i] for h in HP])) for i in (1, 2, 3))
+head_faces = loft(HP, "face", n=HN)
+# nose (wedge) + ears
+yf = -0.094
+t, bl, br, tip = (bm.verts.new(c) for c in ((0, yf, 1.88), (-.015, yf, 1.822), (.015, yf, 1.822), (0, yf - .030, 1.828)))
+nose = [bm.faces.new(f) for f in ((tip, bl, br), (t, bl, tip), (t, tip, br), (t, br, bl))]
+for f in nose: f.material_index = MI["face"]
+bmesh.ops.recalc_face_normals(bm, faces=nose)
+NOSE = set(f.index for f in nose)
 for s in (-1, 1):
-    block(s * .098, 0.005, 1.86, .018, .030, .050, "skin")
+    loft([(1.84, .006, .016), (1.865, .009, .022), (1.90, .008, .020), (1.915, .004, .012)], "face", x=s * .098, y=.006, n=8)
 
-bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+# Face UVs: planar front projection (face painted on the texture); everything behind the face uses a plain skin patch.
+FX, FZ0, FZS = 0.24, 1.72, 0.30
+for f in bm.faces:
+    if f.material_index == MI["face"]:
+        behind = f.index in NOSE or sum(v.co.y for v in f.verts) / len(f.verts) > 0.0
+        for l in f.loops:
+            c = l.vert.co
+            l[UV].uv = ((0.5, 0.97) if f.index in NOSE else (0.02, 0.5)) if behind else (0.5 + c.x / FX, (c.z - FZ0) / FZS)
 
-# ---- Mesh object + materials ----
+# ------------------------------------------------------------------ hair: volumetric shell + 3D locks (no cards)
+def hairline(a):                                          # height of the hairline by angle (270 deg = straight ahead)
+    d = abs((math.degrees(a) - 270 + 180) % 360 - 180)
+    return float(np.interp(d, [0, 35, 60, 90, 130, 180], [1.960, 1.950, 1.935, 1.920, 1.880, 1.830]))
+TOPZ = 2.04
+import random
+rnd = random.Random(7)
+rows = []
+T = [0, .12, .28, .45, .62, .78, .9, 1.0]
+for tj in T:
+    row = []
+    for i in range(HN):
+        a = (i + .5) * 2 * math.pi / HN
+        hl = hairline(a); z = hl + tj * (TOPZ - hl)
+        rx, ry, cy = headp(z)
+        k = 1 / math.cos(math.pi / HN)
+        sc = 1.0 if tj < 1 else 0.55                       # last row closes into a dome
+        jit = 1 + (rnd.random() - .5) * (.06 if 0 < tj < 1 else 0)
+        row.append(Vector(((rx * 1.10 * jit + .008) * k * sc * math.cos(a), cy + (ry * 1.10 * jit + .008) * k * sc * math.sin(a), z)))
+    rows.append(row)
+loft_pts(rows, "hair", tile=(3, 1), cap_bottom=False)
+
+def smooth_path(path, sub=3):
+    """Catmull-Rom resample so locks bend smoothly instead of kinking."""
+    P = [Vector(p) for p in path]; P = [P[0]] + P + [P[-1]]; out = []
+    for i in range(1, len(P) - 2):
+        for t in (j / sub for j in range(sub)):
+            out.append(0.5 * ((2 * P[i]) + (-P[i-1] + P[i+1]) * t + (2*P[i-1] - 5*P[i] + 4*P[i+1] - P[i+2]) * t*t
+                              + (-P[i-1] + 3*P[i] - 3*P[i+1] + P[i+2]) * t**3))
+    out.append(P[-2])
+    return out
+
+def lock(path, r0, r1, n=6, flat=0.85):
+    pts = smooth_path(path, 2)
+    radii = [r0 + (r1 - r0) * (i / (len(pts) - 1)) ** 0.8 for i in range(len(pts))]
+    tube(pts, radii, "hair", n=n, flat=flat)
+
+# swept fringe (falls across the forehead toward the viewer's left), shaggy side locks over the ears, nape tufts
+for i, (x, tipz, sw) in enumerate(((-.082, 1.940, .010), (-.055, 1.915, .005), (-.027, 1.925, .000), (0.0, 1.905, -.006),
+                                   (.027, 1.930, -.012), (.055, 1.945, -.016), (.082, 1.955, -.012))):
+    lock([(x * .8, -.03, 2.04), (x, -.09, 2.025), (x * 1.04 + sw, -.126, 1.975), (x * 1.06 + sw * 3, -.134, tipz)], .030, .003)
+for s_ in (-1, 1):
+    for y, endz in ((-.05, 1.865), (.0, 1.84), (.04, 1.82)):
+        lock([(s_ * .090, y, 1.99), (s_ * .104, y, 1.93), (s_ * .106, y + .006, endz + .04), (s_ * .101, y + .010, endz)], .026, .003)
+for x, endz in ((-.07, 1.80), (-.035, 1.775), (0.0, 1.79), (.035, 1.77), (.07, 1.80)):
+    lock([(x, .085, 1.94), (x * 1.1, .110, 1.87), (x * 1.1, .113, 1.82), (x, .104, endz)], .030, .003)
+
+# ------------------------------------------------------------------ mesh object
 mesh = bpy.data.meshes.new("Alex_PS2_Base")
 bm.to_mesh(mesh)
 tris = sum(len(p.vertices) - 2 for p in mesh.polygons)
 bm.free()
-assert tris < 2000, f"Too many tris: {tris}"
-print(f"Alex: {len(mesh.polygons)} faces, {tris} tris, height {8*H} m")
-for name, col in MATS.items():
+assert tris < MAX_TRIS, f"Too many tris: {tris}"
+print(f"Alex: {len(mesh.polygons)} faces, {tris} tris")
+
+# ------------------------------------------------------------------ procedural textures (numpy)
+def vnoise(w, h, cx, cy, seed):
+    g = np.random.default_rng(seed).random((cy + 2, cx + 2))
+    xs, ys = np.linspace(0, cx, w, endpoint=False), np.linspace(0, cy, h, endpoint=False)
+    x0, y0 = xs.astype(int), ys.astype(int)
+    fx, fy = xs - x0, ys - y0
+    fx, fy = fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)
+    a = g[y0][:, x0] * (1 - fx) + g[y0][:, x0 + 1] * fx
+    b = g[y0 + 1][:, x0] * (1 - fx) + g[y0 + 1][:, x0 + 1] * fx
+    return a * (1 - fy)[:, None] + b * fy[:, None]
+
+def uvgrid(w, h):
+    return np.meshgrid(np.linspace(0, 1, w), np.linspace(0, 1, h))   # row 0 = v 0 = image bottom (Blender)
+
+def blend(img, mask, col, a=1.0):
+    return img * (1 - (mask * a)[..., None]) + np.array(col) * (mask * a)[..., None]
+
+def blob(X, Z, cx, cz, rx, rz, soft=0.35, rot=0.0):
+    dx, dz = X - cx, Z - cz
+    if rot:
+        dx, dz = dx * math.cos(rot) + dz * math.sin(rot), -dx * math.sin(rot) + dz * math.cos(rot)
+    return np.clip((1 - np.sqrt((dx / rx) ** 2 + (dz / rz) ** 2)) / soft, 0, 1)
+
+SKIN = (0.80, 0.62, 0.52)
+def tex_face():
+    w = h = 512
+    U, V = uvgrid(w, h)
+    X, Z = (U - .5) * FX, FZ0 + V * FZS
+    n1, n2 = vnoise(w, h, 24, 24, 1), vnoise(w, h, 96, 96, 2)
+    img = np.ones((h, w, 3)) * np.array(SKIN) * (0.94 + 0.08 * n1 + 0.03 * n2)[..., None]
+    img = blend(img, np.clip((np.abs(X) - .06) / .04, 0, 1), (.58, .43, .35), .8)       # sides fall into shade
+    img = blend(img, np.clip((1.80 - Z) / .06, 0, 1), (.60, .45, .38), .7)              # under the jaw
+    img = blend(img, np.clip((Z - 1.93) / .05, 0, 1), (.86, .68, .57), .5)              # forehead light
+    for s in (-1, 1):
+        img = blend(img, blob(X, Z, s * .052, 1.835, .03, .02, .8), (.78, .45, .42), .35)           # cheeks
+        img = blend(img, blob(X, Z, s * .036, 1.875, .036, .022, .7), (.55, .38, .34), .35)          # eye socket
+        img = blend(img, blob(X, Z, s * .036, 1.857, .030, .009, .7), (.48, .36, .42), .30)          # under-eye shadow
+        e = blob(X, Z, s * .036, 1.875, .0215, .0105, .12)                                           # eye white
+        img = blend(img, e, (.92, .92, .90))
+        ex = s * .036 + (-s * .0015)
+        img = blend(img, blob(X, Z, ex, 1.875, .0102, .0102, .15), (.25, .44, .68))                  # blue iris
+        img = blend(img, blob(X, Z, ex, 1.875, .0102, .0102, .15) * (1 - blob(X, Z, ex, 1.875, .0078, .0078, .2)), (.12, .2, .32), .8)
+        img = blend(img, blob(X, Z, ex, 1.875, .0045, .0045, .25), (.02, .02, .03))                  # pupil
+        img = blend(img, blob(X, Z, ex + s * .003, 1.8795, .0022, .0022, .5), (1, 1, 1), .9)         # catchlight
+        lid = np.clip(blob(X, Z, s * .036, 1.8785, .0235, .0125, .2) - blob(X, Z, s * .036, 1.8715, .0235, .0125, .2), 0, 1)
+        img = blend(img, lid, (.16, .10, .09), .85)                                                  # upper lid line
+        brow = blob(X, Z, s * .038, 1.908 + (abs(X) - .038) * .12, .032, .0055, .5, rot=-s * .12)
+        img = blend(img, brow, (.40, .32, .20), .9)                                                  # brows (dark blond)
+        img = blend(img, blob(X, Z, s * .010, 1.829, .0042, .0032, .5), (.22, .1, .09), .9)          # nostrils
+        img = blend(img, blob(X, Z, s * .019, 1.852, .008, .03, .8), (.5, .36, .3), .25)             # nose side shade
+    img = blend(img, blob(X, Z, 0, 1.826, .014, .007, .6), (.9, .72, .62), .25)                      # nose tip light
+    img = blend(img, blob(X, Z, 0, 1.783, .028, .0075, .5), (.62, .36, .34), .9)                     # upper lip
+    img = blend(img, blob(X, Z, 0, 1.771, .024, .0065, .5), (.68, .42, .39), .9)                     # lower lip
+    img = blend(img, blob(X, Z, 0, 1.7775, .027, .0014, .6), (.22, .1, .1), .95)                     # mouth line
+    img = blend(img, blob(X, Z, 0, 1.759, .028, .007, .8), (.62, .46, .4), .35)                      # under-lip shade
+    img = blend(img, np.clip((n2 - .72) * 4, 0, 1), (.7, .52, .44), .25)                             # pores
+    return np.clip(img, 0, 1)
+
+def tex_skin():
+    n = vnoise(256, 256, 16, 16, 3)
+    return np.ones((256, 256, 3)) * np.array(SKIN) * (0.93 + 0.1 * n)[..., None]
+
+def tex_tee():
+    w = h = 256
+    U, V = uvgrid(w, h)
+    n1, n2, n3 = vnoise(w, h, 8, 8, 4), vnoise(w, h, 32, 32, 5), vnoise(w, h, 6, 6, 6)
+    img = np.ones((h, w, 3)) * np.array((.74, .72, .67)) * (0.86 + 0.14 * n1)[..., None]
+    img = blend(img, np.clip((n3 - .6) * 3, 0, 1), (.62, .55, .36), .55)                  # sweat blooms
+    img = blend(img, np.clip((.25 - n1) * 3, 0, 1) + np.clip((.12 - V) * 4, 0, 1) * .6, (.3, .26, .2), .55)  # dirt, dirty hem
+    img = img * (0.96 + 0.04 * np.sin(V * 70 + n2 * 6))[..., None]                         # wrinkles
+    return np.clip(img, 0, 1)
+
+def tex_jeans():
+    w = h = 256
+    U, V = uvgrid(w, h)
+    xi, yi = np.arange(w)[None, :] * np.ones((h, 1)), np.arange(h)[:, None] * np.ones((1, w))
+    n1, n2 = vnoise(w, h, 8, 8, 7), vnoise(w, h, 5, 5, 8)
+    img = np.ones((h, w, 3)) * np.array((.085, .085, .095)) * (0.8 + 0.3 * n1 + .12 * ((xi + yi) % 4 < 2))[..., None]
+    img = blend(img, np.clip((n2 - .6) * 3, 0, 1), (.36, .36, .37), .30)                  # fade
+    img = blend(img, blob(U, V, .5, .43, .6, .1, .8), (.36, .36, .37), .35)               # knee wear
+    img = blend(img, np.clip((.1 - V) * 10, 0, 1) * (0.5 + n1), (.2, .15, .1), .7)        # muddy hem
+    return np.clip(img, 0, 1)
+
+def tex_sneaker():
+    n = vnoise(128, 128, 8, 8, 9)
+    img = np.ones((128, 128, 3)) * np.array((.5, .49, .46)) * (0.75 + 0.35 * n)[..., None]
+    U, V = uvgrid(128, 128)
+    return np.clip(blend(img, np.clip((.4 - V) * 3, 0, 1), (.24, .19, .13), .55), 0, 1)
+
+def tex_hair():
+    w, h = 256, 128
+    U, V = uvgrid(w, h)
+    s = vnoise(w, h, 48, 3, 10)
+    img = np.ones((h, w, 3)) * np.array((.66, .55, .36)) * (0.62 + 0.62 * s)[..., None]          # fine strands run along v
+    img = blend(img, np.clip((s - .75) * 5, 0, 1), (.85, .72, .45), .6)                        # blond highlights
+    img = blend(img, np.clip((.3 - V) * 3, 0, 1), (.3, .22, .12), .55)                         # darker roots
+    return np.clip(img, 0, 1)
+
+TEX = {"face": tex_face, "skin": tex_skin, "tee": tex_tee, "jeans": tex_jeans, "sneaker": tex_sneaker, "hair": tex_hair}
+tex_dir = os.path.join(OUT_DIR, "alex_textures"); os.makedirs(tex_dir, exist_ok=True)
+for name in MATS:
     m = bpy.data.materials.new("Alex_" + name)
     m.use_nodes = True
     b = m.node_tree.nodes["Principled BSDF"]
-    b.inputs["Base Color"].default_value = (*col, 1)
     b.inputs["Roughness"].default_value = 1.0
+    try: b.inputs["Specular IOR Level"].default_value = 0.0
+    except KeyError: pass
+    if name in TEX:
+        a = TEX[name]()
+        img = bpy.data.images.new("Alex_" + name, a.shape[1], a.shape[0], alpha=False)
+        img.pixels.foreach_set(np.dstack([a, np.ones(a.shape[:2])]).astype(np.float32).ravel())
+        img.filepath_raw = os.path.join(tex_dir, f"alex_{name}.png"); img.file_format = 'PNG'; img.save(); img.pack()
+        tx = m.node_tree.nodes.new("ShaderNodeTexImage"); tx.image = img
+        m.node_tree.links.new(tx.outputs["Color"], b.inputs["Base Color"])
+    else:
+        b.inputs["Base Color"].default_value = (0.32, 0.30, 0.27, 1)                          # sole
     mesh.materials.append(m)
 
 obj = bpy.data.objects.new("Alex_PS2_Base", mesh)
@@ -100,13 +301,11 @@ bpy.context.collection.objects.link(obj)
 bpy.context.view_layer.objects.active = obj
 obj.select_set(True)
 bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-bpy.ops.object.mode_set(mode='EDIT'); bpy.ops.mesh.select_all(action='SELECT')
-bpy.ops.uv.smart_project(angle_limit=1.15, island_margin=0.02)
-bpy.ops.object.mode_set(mode='OBJECT')
-bpy.ops.object.shade_flat()
+try:
+    bpy.ops.object.shade_smooth_by_angle(angle=math.radians(65))
+except Exception:
+    bpy.ops.object.shade_smooth()
 
-d = bpy.path.abspath("//") if bpy.data.filepath else os.path.dirname(os.path.abspath(__file__))
-out = os.path.join(d, "Alex_PS2_Base.glb")
-bpy.ops.export_scene.gltf(filepath=out, export_format='GLB', use_selection=True,
-                          export_apply=True, export_yup=True)
+out = os.path.join(OUT_DIR, "Alex_PS2_Base.glb")
+bpy.ops.export_scene.gltf(filepath=out, export_format='GLB', use_selection=True, export_apply=True, export_yup=True)
 print("Exported:", out)
