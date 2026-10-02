@@ -4,7 +4,7 @@
 # Body = lofted rounded cross-sections. Face/skin/cloth/hair textures are painted procedurally (numpy) and embedded in the GLB.
 import bpy, bmesh, math, os
 import numpy as np
-from mathutils import Vector
+from mathutils import Vector, Matrix
 
 H = 0.25
 OUT_DIR = bpy.path.abspath("//") if bpy.data.filepath else os.path.dirname(os.path.abspath(__file__))
@@ -72,18 +72,21 @@ def tube(path, radii, mat, n=6, flat=1.0, tile=(1, 1)):
 CHIN = 7 * H; SHOULD = 6.5 * H; HAND_Z = 3 * H
 
 # Torso: white tee, baggy hem, rounded chest, sloped shoulders
-loft([(0.90, .188, .127), (0.95, .184, .126), (1.06, .170, .118), (1.18, .160, .112), (1.30, .170, .118),
-      (1.40, .186, .126), (1.50, .200, .124), (1.59, .222, .116), (1.63, .190, .100), (1.66, .100, .075),
-      (1.675, .070, .062)], "tee", n=14, tile=(2, 2))
-loft([(1.64, .082, .070), (1.665, .086, .073), (1.685, .076, .065)], "tee", n=14, tile=(2, 0.3))   # crew collar
-loft([(1.61, .064, .064), (1.69, .057, .058), (1.77, .056, .060)], "skin", n=10)                 # neck
+loft([(0.90, .188, .127, 0), (0.95, .184, .126, 0), (1.06, .170, .118, .004), (1.18, .160, .112, .010),
+      (1.30, .170, .120, .018), (1.40, .184, .128, .026), (1.50, .198, .130, .032), (1.57, .216, .124, .028),
+      (1.61, .196, .108, .020), (1.645, .130, .088, .008), (1.668, .076, .066, -.004), (1.682, .058, .056, -.012)],
+     "tee", n=14, tile=(2, 2))
+loft([(1.64, .082, .070, -.004), (1.665, .086, .073, -.006), (1.685, .076, .065, -.010)], "tee", n=14, tile=(2, 0.3))   # crew collar
+loft([(1.60, .064, .064, 0), (1.69, .057, .058, -.014), (1.77, .056, .060, -.030)], "skin", n=10)   # neck leans forward
 
 AX = 0.185                                                       # arm centre; outer edge = 0.25 (2 heads wide in total)
 for s in (-1, 1):
-    loft([(0.90, .032, .026), (0.98, .040, .034), (1.10, .045, .045, -.006), (1.20, .048, .048, -.010),
-          (1.32, .054, .054, -.004), (1.47, .058, .058), (1.61, .060, .060)], "skin", x=s * AX, n=10)
-    loft([(0.75, .012, .010), (0.78, .026, .020), (0.83, .034, .024), (0.93, .031, .025)], "skin", x=s * AX, n=10)  # hand
-    loft([(1.30, .066, .066), (1.40, .068, .068), (1.50, .068, .067), (1.60, .066, .064), (1.64, .056, .054), (1.665, .030, .030)], "tee", x=s * AX, n=12)    # short sleeve
+    AY = -0.008
+    loft([(0.90, .032, .026, -.036), (0.98, .040, .034, -.034), (1.10, .045, .045, -.026), (1.20, .048, .048, -.016),
+          (1.32, .054, .054, -.006), (1.47, .058, .058), (1.57, .060, .060)], "skin", x=s * AX, y=AY, n=10)
+    loft([(0.75, .012, .010, -.040), (0.78, .026, .020, -.040), (0.83, .034, .024, -.038), (0.93, .031, .025, -.036)],
+         "skin", x=s * AX, y=AY, n=10)  # hand
+    loft([(1.30, .066, .066), (1.40, .068, .068), (1.50, .068, .067), (1.56, .066, .064), (1.595, .054, .052), (1.615, .028, .028)], "tee", x=s * AX, y=AY, n=12)    # short sleeve
 
 # Hips + legs: baggy black jeans pooling over sneakers
 loft([(0.78, .120, .095), (0.83, .160, .110), (0.88, .176, .120), (0.95, .174, .116), (0.99, .150, .106)], "jeans", n=14)
@@ -103,6 +106,7 @@ HN = 16
 def headp(z):
     zs = [h[0] for h in HP]
     return tuple(float(np.interp(z, zs, [h[i] for h in HP])) for i in (1, 2, 3))
+HEAD_START = len(bm.verts)
 head_faces = loft(HP, "face", n=HN)
 # nose (wedge) + ears
 yf = -0.094
@@ -127,7 +131,7 @@ for f in bm.faces:
 def hairline(a):                                          # height of the hairline by angle (270 deg = straight ahead)
     d = abs((math.degrees(a) - 270 + 180) % 360 - 180)
     return float(np.interp(d, [0, 35, 60, 90, 130, 180], [1.960, 1.950, 1.935, 1.915, 1.870, 1.800]))
-TOPZ = 2.05
+TOPZ = 2.022
 import random
 rnd = random.Random(7)
 rows = []
@@ -139,9 +143,9 @@ for tj in T:
         hl = hairline(a); z = hl + tj * (TOPZ - hl)
         rx, ry, cy = headp(z)
         k = 1 / math.cos(math.pi / HN)
-        sc = float(np.interp(tj, [0, .76, .86, .93, .975, 1.0], [1, 1, .93, .8, .6, .3]))   # rows close into a rounded dome
+        sc = float(np.interp(tj, [0, .76, .86, .93, .975, 1.0], [1, 1, .90, .72, .48, .15]))   # rows close into a rounded dome
         jit = 1 + (rnd.random() - .5) * (.06 if 0 < tj < 1 else 0)
-        row.append(Vector(((rx * 1.10 * jit + .008) * k * sc * math.cos(a), cy + (ry * 1.10 * jit + .008) * k * sc * math.sin(a), z)))
+        row.append(Vector(((rx * 1.08 * jit + .007) * k * sc * math.cos(a), cy + (ry * 1.08 * jit + .007) * k * sc * math.sin(a), z)))
     rows.append(row)
 loft_pts(rows, "hair_dark", tile=(3, 1), cap_bottom=False)   # darker undercoat; lighter locks go on top
 
@@ -159,18 +163,22 @@ hr = random.Random(11)
 def lock(path, r0, r1=0.007, n=6, flat=0.7, mat="hair", wob=0.004):
     """A clump of hair: tapered, slightly wobbly tube with its own streak offset in the texture."""
     pts = smooth_path([(x + hr.uniform(-wob, wob), y + hr.uniform(-wob, wob), z) for x, y, z in path], 2)
-    radii = [r0 * (1 - (i / (len(pts) - 1)) ** 1.1) + r1 for i in range(len(pts))]
+    m = len(pts) - 1
+    def prof(t):  # slim at the root, fullest ~40% down, long curved taper to the tip
+        return (0.55 + 0.45 * math.sin(math.pi / 2 * min(t / 0.4, 1))) * (1 - max(0.0, (t - 0.4) / 0.6) ** 1.4)
+    radii = [r0 * prof(i / m) + r1 for i in range(len(pts))]
     uo = hr.random()
     for f in tube(pts, radii, mat, n=n, flat=flat):
         for l in f.loops: l[UV].uv = (l[UV].uv[0] + uo, l[UV].uv[1])
 
-# crown: clumps that sweep over the top and flow down the back as one continuous curtain
-for x in (-.075, -.05, -.025, 0.0, .025, .05, .075):
-    lock([(x, -.075, 2.03), (x * 1.05, -.01, 2.065), (x * 1.15, .06, 2.05), (x * 1.2, .108, 1.975), (x * 1.15, .122, 1.89),
-          (x * 1.1, .126, 1.82)], .042, flat=.9)
-# swept fringe: clumps fall over the forehead and sweep toward the viewer's left, tips at different heights
-for i, (x, tipz) in enumerate(((.075, 1.955), (.045, 1.935), (.015, 1.915), (-.015, 1.925), (-.045, 1.90), (-.075, 1.935))):
-    lock([(x * .7, -.04, 2.04), (x, -.095, 2.03), (x * 1.0 - .014, -.128, 1.985), (x - .028 - .004 * i, -.134, tipz)], .034, flat=.7)
+# crown: clumps that sweep back over the top and flow down the back as one curtain
+for x in (-.06, -.03, 0.0, .03, .06):
+    lock([(x * .8, -.07, 2.00), (x * .85, -.01, 2.027), (x * .95, .06, 2.017), (x * 1.08, .108, 1.97), (x * 1.12, .122, 1.89),
+          (x * 1.1, .126, 1.82)], .032, flat=.75)
+# swept fringe: broad overlapping clumps over the forehead, tips pushed to one side, ending at brow height
+for i, (x, tipz) in enumerate(((.07, 1.955), (.035, 1.94), (0.0, 1.925), (-.035, 1.935), (-.07, 1.95))):
+    lock([(x * .7, -.04, 2.02), (x, -.09, 2.012), (x - .010, -.125, 1.982), (x - .035 - .004 * i, -.134, tipz)],
+         .040, r1=.009, flat=.5)
 # side locks over the ears (front ones shorter), curved in at the tips
 for s_ in (-1, 1):
     for y, endz in ((-.06, 1.905), (-.025, 1.855), (.015, 1.825), (.055, 1.80)):
@@ -179,6 +187,12 @@ for s_ in (-1, 1):
 # nape: shorter layer on top of the curtain that flicks out at the ends
 for x, endz in ((-.07, 1.80), (-.04, 1.77), (-.01, 1.785), (.02, 1.765), (.05, 1.79), (.075, 1.80)):
     lock([(x, .10, 1.92), (x * 1.1, .124, 1.86), (x * 1.1, .132, 1.81), (x * 1.08, .139, endz)], .030, flat=.7)
+
+# ------------------------------------------------------------------ posture: head carried slightly forward, chin tucked
+bm.verts.ensure_lookup_table()
+hv = [bm.verts[i] for i in range(HEAD_START, len(bm.verts))]
+bmesh.ops.rotate(bm, verts=hv, cent=(0, 0, 1.72), matrix=Matrix.Rotation(0.08, 3, 'X'))
+bmesh.ops.translate(bm, verts=hv, vec=(0, -0.028, 0))
 
 # ------------------------------------------------------------------ mesh object
 mesh = bpy.data.meshes.new("Alex_PS2_Base")
