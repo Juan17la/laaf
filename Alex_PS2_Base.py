@@ -13,7 +13,7 @@ MAX_TRIS = 6000
 bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete()
 bm = bmesh.new()
 UV = bm.loops.layers.uv.verify()
-MATS = ["face", "skin", "tee", "jeans", "sneaker", "sole", "hair"]
+MATS = ["face", "skin", "tee", "jeans", "sneaker", "sole", "hair", "hair_dark"]
 MI = {m: i for i, m in enumerate(MATS)}
 
 # ------------------------------------------------------------------ geometry helpers
@@ -126,12 +126,12 @@ for f in bm.faces:
 # ------------------------------------------------------------------ hair: volumetric shell + 3D locks (no cards)
 def hairline(a):                                          # height of the hairline by angle (270 deg = straight ahead)
     d = abs((math.degrees(a) - 270 + 180) % 360 - 180)
-    return float(np.interp(d, [0, 35, 60, 90, 130, 180], [1.960, 1.950, 1.935, 1.920, 1.880, 1.830]))
-TOPZ = 2.04
+    return float(np.interp(d, [0, 35, 60, 90, 130, 180], [1.960, 1.950, 1.935, 1.915, 1.870, 1.800]))
+TOPZ = 2.05
 import random
 rnd = random.Random(7)
 rows = []
-T = [0, .12, .28, .45, .62, .78, .9, 1.0]
+T = [0, .12, .28, .45, .62, .76, .86, .93, .975, 1.0]
 for tj in T:
     row = []
     for i in range(HN):
@@ -139,11 +139,11 @@ for tj in T:
         hl = hairline(a); z = hl + tj * (TOPZ - hl)
         rx, ry, cy = headp(z)
         k = 1 / math.cos(math.pi / HN)
-        sc = 1.0 if tj < 1 else 0.55                       # last row closes into a dome
+        sc = float(np.interp(tj, [0, .76, .86, .93, .975, 1.0], [1, 1, .93, .8, .6, .3]))   # rows close into a rounded dome
         jit = 1 + (rnd.random() - .5) * (.06 if 0 < tj < 1 else 0)
         row.append(Vector(((rx * 1.10 * jit + .008) * k * sc * math.cos(a), cy + (ry * 1.10 * jit + .008) * k * sc * math.sin(a), z)))
     rows.append(row)
-loft_pts(rows, "hair", tile=(3, 1), cap_bottom=False)
+loft_pts(rows, "hair_dark", tile=(3, 1), cap_bottom=False)   # darker undercoat; lighter locks go on top
 
 def smooth_path(path, sub=3):
     """Catmull-Rom resample so locks bend smoothly instead of kinking."""
@@ -155,20 +155,30 @@ def smooth_path(path, sub=3):
     out.append(P[-2])
     return out
 
-def lock(path, r0, r1, n=6, flat=0.85):
-    pts = smooth_path(path, 2)
-    radii = [r0 + (r1 - r0) * (i / (len(pts) - 1)) ** 0.8 for i in range(len(pts))]
-    tube(pts, radii, "hair", n=n, flat=flat)
+hr = random.Random(11)
+def lock(path, r0, r1=0.007, n=6, flat=0.7, mat="hair", wob=0.004):
+    """A clump of hair: tapered, slightly wobbly tube with its own streak offset in the texture."""
+    pts = smooth_path([(x + hr.uniform(-wob, wob), y + hr.uniform(-wob, wob), z) for x, y, z in path], 2)
+    radii = [r0 * (1 - (i / (len(pts) - 1)) ** 1.1) + r1 for i in range(len(pts))]
+    uo = hr.random()
+    for f in tube(pts, radii, mat, n=n, flat=flat):
+        for l in f.loops: l[UV].uv = (l[UV].uv[0] + uo, l[UV].uv[1])
 
-# swept fringe (falls across the forehead toward the viewer's left), shaggy side locks over the ears, nape tufts
-for i, (x, tipz, sw) in enumerate(((-.082, 1.940, .010), (-.055, 1.915, .005), (-.027, 1.925, .000), (0.0, 1.905, -.006),
-                                   (.027, 1.930, -.012), (.055, 1.945, -.016), (.082, 1.955, -.012))):
-    lock([(x * .8, -.03, 2.04), (x, -.09, 2.025), (x * 1.04 + sw, -.126, 1.975), (x * 1.06 + sw * 3, -.134, tipz)], .030, .003)
+# crown: clumps that sweep over the top and flow down the back as one continuous curtain
+for x in (-.075, -.05, -.025, 0.0, .025, .05, .075):
+    lock([(x, -.075, 2.03), (x * 1.05, -.01, 2.065), (x * 1.15, .06, 2.05), (x * 1.2, .108, 1.975), (x * 1.15, .122, 1.89),
+          (x * 1.1, .126, 1.82)], .042, flat=.9)
+# swept fringe: clumps fall over the forehead and sweep toward the viewer's left, tips at different heights
+for i, (x, tipz) in enumerate(((.075, 1.955), (.045, 1.935), (.015, 1.915), (-.015, 1.925), (-.045, 1.90), (-.075, 1.935))):
+    lock([(x * .7, -.04, 2.04), (x, -.095, 2.03), (x * 1.0 - .014, -.128, 1.985), (x - .028 - .004 * i, -.134, tipz)], .034, flat=.7)
+# side locks over the ears (front ones shorter), curved in at the tips
 for s_ in (-1, 1):
-    for y, endz in ((-.05, 1.865), (.0, 1.84), (.04, 1.82)):
-        lock([(s_ * .090, y, 1.99), (s_ * .104, y, 1.93), (s_ * .106, y + .006, endz + .04), (s_ * .101, y + .010, endz)], .026, .003)
-for x, endz in ((-.07, 1.80), (-.035, 1.775), (0.0, 1.79), (.035, 1.77), (.07, 1.80)):
-    lock([(x, .085, 1.94), (x * 1.1, .110, 1.87), (x * 1.1, .113, 1.82), (x, .104, endz)], .030, .003)
+    for y, endz in ((-.06, 1.905), (-.025, 1.855), (.015, 1.825), (.055, 1.80)):
+        lock([(s_ * .090, y, 1.995), (s_ * .106, y, 1.945), (s_ * .108, y + .004, endz + .05), (s_ * .099, y + .012, endz)],
+             .022, flat=.75)
+# nape: shorter layer on top of the curtain that flicks out at the ends
+for x, endz in ((-.07, 1.80), (-.04, 1.77), (-.01, 1.785), (.02, 1.765), (.05, 1.79), (.075, 1.80)):
+    lock([(x, .10, 1.92), (x * 1.1, .124, 1.86), (x * 1.1, .132, 1.81), (x * 1.08, .139, endz)], .030, flat=.7)
 
 # ------------------------------------------------------------------ mesh object
 mesh = bpy.data.meshes.new("Alex_PS2_Base")
@@ -267,16 +277,17 @@ def tex_sneaker():
     U, V = uvgrid(128, 128)
     return np.clip(blend(img, np.clip((.4 - V) * 3, 0, 1), (.24, .19, .13), .55), 0, 1)
 
-def tex_hair():
+def tex_hair(base=(.66, .55, .36), dark=False):
     w, h = 256, 128
     U, V = uvgrid(w, h)
     s = vnoise(w, h, 48, 3, 10)
-    img = np.ones((h, w, 3)) * np.array((.66, .55, .36)) * (0.62 + 0.62 * s)[..., None]          # fine strands run along v
-    img = blend(img, np.clip((s - .75) * 5, 0, 1), (.85, .72, .45), .6)                        # blond highlights
+    img = np.ones((h, w, 3)) * np.array(base) * (0.62 + 0.62 * s)[..., None]          # fine strands run along v
+    if not dark:
+        img = blend(img, np.clip((s - .75) * 5, 0, 1), (.85, .72, .45), .6)                    # blond highlights
     img = blend(img, np.clip((.3 - V) * 3, 0, 1), (.3, .22, .12), .55)                         # darker roots
     return np.clip(img, 0, 1)
 
-TEX = {"face": tex_face, "skin": tex_skin, "tee": tex_tee, "jeans": tex_jeans, "sneaker": tex_sneaker, "hair": tex_hair}
+TEX = {"face": tex_face, "skin": tex_skin, "tee": tex_tee, "jeans": tex_jeans, "sneaker": tex_sneaker, "hair": tex_hair, "hair_dark": lambda: tex_hair((.40, .31, .17), True)}
 tex_dir = os.path.join(OUT_DIR, "alex_textures"); os.makedirs(tex_dir, exist_ok=True)
 for name in MATS:
     m = bpy.data.materials.new("Alex_" + name)
