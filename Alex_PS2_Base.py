@@ -131,7 +131,7 @@ for f in bm.faces:
 def hairline(a):                                          # height of the hairline by angle (270 deg = straight ahead)
     d = abs((math.degrees(a) - 270 + 180) % 360 - 180)
     return float(np.interp(d, [0, 35, 60, 90, 130, 180], [1.960, 1.950, 1.935, 1.915, 1.870, 1.800]))
-TOPZ = 2.022
+TOPZ = 2.012
 import random
 rnd = random.Random(7)
 rows = []
@@ -143,7 +143,7 @@ for tj in T:
         hl = hairline(a); z = hl + tj * (TOPZ - hl)
         rx, ry, cy = headp(z)
         k = 1 / math.cos(math.pi / HN)
-        sc = float(np.interp(tj, [0, .76, .86, .93, .975, 1.0], [1, 1, .90, .72, .48, .15]))   # rows close into a rounded dome
+        sc = float(np.interp(tj, [0, .76, .86, .93, .975, 1.0], [1, 1, .88, .66, .4, .1]))   # rows close into a rounded dome
         jit = 1 + (rnd.random() - .5) * (.06 if 0 < tj < 1 else 0)
         row.append(Vector(((rx * 1.08 * jit + .007) * k * sc * math.cos(a), cy + (ry * 1.08 * jit + .007) * k * sc * math.sin(a), z)))
     rows.append(row)
@@ -171,23 +171,51 @@ def lock(path, r0, r1=0.007, n=6, flat=0.7, mat="hair", wob=0.004):
     for f in tube(pts, radii, mat, n=n, flat=flat):
         for l in f.loops: l[UV].uv = (l[UV].uv[0] + uo, l[UV].uv[1])
 
-# crown: clumps that sweep back over the top and flow down the back as one curtain
-for x in (-.06, -.03, 0.0, .03, .06):
-    lock([(x * .8, -.07, 2.00), (x * .85, -.01, 2.027), (x * .95, .06, 2.017), (x * 1.08, .108, 1.97), (x * 1.12, .122, 1.89),
-          (x * 1.1, .126, 1.82)], .032, flat=.75)
-# swept fringe: broad overlapping clumps over the forehead, tips pushed to one side, ending at brow height
-for i, (x, tipz) in enumerate(((.07, 1.955), (.035, 1.94), (0.0, 1.925), (-.035, 1.935), (-.07, 1.95))):
-    lock([(x * .7, -.04, 2.02), (x, -.09, 2.012), (x - .010, -.125, 1.982), (x - .035 - .004 * i, -.134, tipz)],
-         .040, r1=.009, flat=.5)
-# side locks over the ears (front ones shorter), curved in at the tips
-for s_ in (-1, 1):
-    for y, endz in ((-.06, 1.905), (-.025, 1.855), (.015, 1.825), (.055, 1.80)):
-        lock([(s_ * .090, y, 1.995), (s_ * .106, y, 1.945), (s_ * .108, y + .004, endz + .05), (s_ * .099, y + .012, endz)],
-             .022, flat=.75)
-# nape: shorter layer on top of the curtain that flicks out at the ends
-for x, endz in ((-.07, 1.80), (-.04, 1.77), (-.01, 1.785), (.02, 1.765), (.05, 1.79), (.075, 1.80)):
-    lock([(x, .10, 1.92), (x * 1.1, .124, 1.86), (x * 1.1, .132, 1.81), (x * 1.08, .139, endz)], .030, flat=.7)
+# ---- hair mass: continuous ragged-hem shells. Front columns end on the forehead and sweep sideways (fringe), the sides
+#      tuck behind the ears, the back falls to the nape in pointed tufts. Two layers (long dark inner, shorter light outer)
+#      give the layered shaggy cut and depth between the tufts.
+TR = [0, .06, .12, .2, .3, .42, .55, .7, .85, 1.0]            # rows, dense near the crown where the curvature is
+def tri(x):                                                    # triangle wave 0..1 -> pointed tufts
+    return abs((x % 1.0) * 2 - 1)
 
+def hair_mass(mat, cn, seed, rad, longer, period, phase, sweep):
+    rj = random.Random(seed)
+    mass = [[] for _ in TR]
+    for i in range(cn):
+        a = (i + phase) * 2 * math.pi / cn
+        d = abs((math.degrees(a) - 270 + 180) % 360 - 180)
+        base = float(np.interp(d, [0, 35, 60, 82, 95, 120, 150, 180], [1.945, 1.935, 1.925, 1.925, 1.865, 1.815, 1.785, 1.775]))
+        back = float(np.clip((d - 80) / 40, 0, 1))                        # 0 at the temples, 1 around the back
+        point = (1 - tri(i / period)) * (.034 + .016 * back) + (1 - tri(i / (period * 2.7) + .3)) * .018 * (1 - back)               # tuft shape: long in the middle of each group
+        front = 1 - float(np.clip(d / 60, 0, 1))                             # 1 straight ahead
+        zend = base - longer * back - (.008 + .052 * back) + point * (.7 + .3 * back) + rj.uniform(-.006, .006) - .012 * front
+        zend = min(zend, 1.965)
+        for rowi, ti in enumerate(TR):
+            z = 2.022 + (zend - 2.022) * ti
+            rx, ry, cy = headp(z)
+            flare = .022 * float(np.clip((1.90 - z) / .12, 0, 1)) if d > 70 else 0.0
+            bulk = .006 * math.sin(math.pi * ti) if d < 60 else 0.0
+            dome = math.sqrt(max(0.0, 1 - max(0.0, (z - 1.975) / .062) ** 2)) if z > 1.975 else 1.0   # ellipsoidal crown
+            px = (rx * 1.09 + rad + flare + bulk) * dome * math.cos(a)
+            py = cy + (ry * 1.09 + rad + flare + bulk) * dome * math.sin(a)
+            if d < 70:
+                px += sweep * ti * ti * (1 - d / 70)
+                py -= .016 * ti * ti * front              # fringe tips fall forward over the brow
+            if ti == 0:
+                px, py, z = px * .5, cy + (py - cy) * .5, z + .003         # rounded apex
+            mass[rowi].append(Vector((px, py, z)))
+    fs = loft_pts(mass[::-1], mat, tile=(3, 1), cap_bottom=False)
+    for f in fs:                                                          # flip v so the dark roots sit at the crown
+        for l in f.loops: l[UV].uv = (l[UV].uv[0], 1 - l[UV].uv[1])
+
+hair_mass("hair_dark", 40, 5, .006, .035, 3.0, .5, -.030)   # inner layer: longer, darker
+hair_mass("hair", 48, 9, .015, .0, 4.0, .5, -.050)          # outer layer: shorter, lighter
+
+for f in bm.faces:                                           # caps: dark root colour, no highlight streak
+    if len(f.verts) > 8 and f.material_index in (MI["hair"], MI["hair_dark"]):
+        for l in f.loops: l[UV].uv = (0.3, 0.1)
+
+# ---- accent clumps on top of the mass, to break up the silhouette
 # ------------------------------------------------------------------ posture: head carried slightly forward, chin tucked
 bm.verts.ensure_lookup_table()
 hv = [bm.verts[i] for i in range(HEAD_START, len(bm.verts))]
