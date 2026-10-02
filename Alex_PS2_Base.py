@@ -36,10 +36,10 @@ for s in (-1, 1):
     box(s * LEG_X, -0.03, 0.05, 0.14, 0.27, 0.10)
 
 # Head: blocky cube, tapered + beveled at the bottom for the jaw. No face detail, no hair.
-hv = box(0, 0, CHIN + H / 2, 0.16, 0.20, H)
+hv = box(0, 0, CHIN + H / 2, 0.19, 0.21, H)
 for v in hv:
     if v.co.z < CHIN + H / 2:
-        v.co.x *= 0.85
+        v.co.x *= 0.9
 bm.edges.ensure_lookup_table()
 jaw = [e for e in bm.edges
        if all(v in hv for v in e.verts) and all(abs(v.co.z - CHIN) < 1e-5 for v in e.verts)]
