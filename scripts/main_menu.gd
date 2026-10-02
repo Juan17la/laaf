@@ -221,11 +221,12 @@ func _row_y(i: int) -> float:
 # ------------------------------------------------------------------ input
 
 func _unhandled_input(e: InputEvent) -> void:
+	var vp := get_viewport()  # taken first: an option can change the scene, after which we're out of the tree
 	if _title:
 		if (e is InputEventKey or e is InputEventJoypadButton or e is InputEventMouseButton) and e.is_pressed() \
 				and not e.is_echo():
 			_title = false
-			get_viewport().set_input_as_handled()
+			vp.set_input_as_handled()
 		return
 	if e.is_action_pressed("ui_down"):
 		_move(1)
@@ -252,7 +253,7 @@ func _unhandled_input(e: InputEvent) -> void:
 			_activate()
 	else:
 		return
-	get_viewport().set_input_as_handled()
+	vp.set_input_as_handled()
 
 
 func _move(d: int) -> void:
