@@ -1,0 +1,197 @@
+class_name Weapons
+extends Node
+## What the player carries: guns (revolver, flare gun, shotgun), Owen's bow, melee weapons (fire axe, bat) and
+## always the fists (FISTS: not a slot, it's what an empty hand or an empty gun hits with). Guns are hitscan
+## from the camera (the shotgun casts `pellets` rays); the bow fires a real Arrow; melee is a timed strike the
+## player swings (see player.gd _strike). "kind" picks the logic, "hold" the arms (player.gd _hold).
+## SWAP-SHOT: fire, then swap within SWAP_WINDOW → the swap is instant and the first shot of the
+## other gun ignores its cooldown and deals DOUBLE_TAP_MULT damage ("DOUBLE TAP"). Pressing fire a
+## moment before the swap lands is buffered, so click → swap+click reads as one move.
+
+signal fired(gun: String, double_tap: bool)
+signal changed
+signal reload_started(gun: String, spent: int)  ## spent: empty chambers being cleared
+
+const SWAP_WINDOW := 0.45  ## after a shot, a swap in this window is instant
+const DOUBLE_TAP_MULT := 1.5
+const SWAP_TIME := 0.35  ## normal holster/draw time
+const FIRE_BUFFER := 0.15
+
+const GUNS := {
+	"revolver": {"name": "Revolver", "kind": "gun", "hold": "pistol", "damage": 34.0, "cooldown": 0.32, "mag": 6,
+			"reload": 1.5, "spread": 0.012, "noise": 40.0, "range": 90.0, "flare": false, "color": Color(1.0, 0.85, 0.5)},
+	"flare": {"name": "Flare gun", "kind": "gun", "hold": "pistol", "damage": 20.0, "cooldown": 0.6, "mag": 1,
+			"reload": 1.1, "spread": 0.004, "noise": 18.0, "range": 60.0, "flare": true, "color": Color(1.0, 0.25, 0.1)},
+	"shotgun": {"name": "Shotgun", "kind": "gun", "hold": "long", "damage": 11.0, "pellets": 7, "cooldown": 0.45,
+			"mag": 2, "reload": 2.2, "spread": 0.07, "noise": 55.0, "range": 32.0, "flare": false,
+			"color": Color(1.0, 0.7, 0.4)},
+	"bow": {"name": "Hunting bow", "kind": "bow", "hold": "bow", "damage": 70.0, "cooldown": 0.3, "mag": 1,
+			"reload": 0.75, "spread": 0.0, "noise": 3.0, "range": 60.0, "flare": false, "color": Color(0.8, 0.9, 0.6)},
+	"axe": {"name": "Fire axe", "kind": "melee", "hold": "melee", "style": "chop", "damage": 58.0, "time": 0.8,
+			"hit_at": 0.5, "reach": 1.7, "stamina": 20.0, "stun": 0.6, "noise": 10.0, "color": Color(1.0, 0.35, 0.3)},
+	"bat": {"name": "Nail bat", "kind": "melee", "hold": "melee", "style": "swing", "damage": 40.0, "time": 0.62,
+			"hit_at": 0.45, "reach": 1.8, "stamina": 15.0, "stun": 1.1, "noise": 9.0, "color": Color(0.9, 0.75, 0.55)},
+}
+## Bare hands (and the butt of a gun: "bash") when there's nothing to shoot. Punches alternate hands.
+const FISTS := {"name": "Fists", "kind": "melee", "hold": "fists", "style": "jab", "damage": 13.0, "time": 0.36,
+		"hit_at": 0.32, "reach": 1.25, "stamina": 6.0, "stun": 0.25, "noise": 5.0, "color": Color(0.9, 0.85, 0.75)}
+const BASH := {"name": "Bash", "kind": "melee", "hold": "pistol", "style": "bash", "damage": 20.0, "time": 0.45,
+		"hit_at": 0.35, "reach": 1.35, "stamina": 8.0, "stun": 0.7, "noise": 6.0, "color": Color(0.9, 0.85, 0.75)}
+
+var owned: Array[String] = []
+var current := 0
+var loaded := {"revolver": 0, "flare": 0, "shotgun": 0, "bow": 0, "axe": 0, "bat": 0}
+var reserve := {"revolver": 0, "flare": 0, "shotgun": 0, "bow": 0, "axe": 0, "bat": 0}
+
+var _cool := 0.0
+var _reload := 0.0
+var _swap := 0.0
+var _since_shot := 99.0
+var _double := 0.0  ## > 0: next shot is a double tap
+var _buffer := 0.0
+
+
+func gun() -> String:
+	return owned[current] if owned.size() > current else ""
+
+
+func spec() -> Dictionary:
+	## What's in hand: the current weapon, or FISTS.
+	return GUNS[gun()] if gun() != "" else FISTS
+
+
+func melee() -> bool:
+	return spec().kind == "melee"
+
+
+func dry() -> bool:
+	## A gun / bow with nothing left to load: fire swings the hands (FISTS / BASH) instead.
+	var g := gun()
+	return g != "" and GUNS[g].kind != "melee" and loaded[g] <= 0 and reserve[g] <= 0 and _reload <= 0.0
+
+
+func give(id: String, rounds := 0) -> void:
+	if id not in owned:
+		owned.append(id)
+		loaded[id] = mini(rounds, GUNS[id].get("mag", 0))
+		rounds -= loaded[id]
+	reserve[id] += rounds
+	changed.emit()
+
+
+func busy() -> bool:
+	return _reload > 0.0 or _swap > 0.0
+
+
+func reloading() -> bool:
+	return _reload > 0.0
+
+
+func tick(delta: float) -> bool:
+	## Advance timers. Returns true when a buffered shot should fire now.
+	_cool = maxf(_cool - delta, 0.0)
+	_since_shot += delta
+	_double = maxf(_double - delta, 0.0)
+	_buffer = maxf(_buffer - delta, 0.0)
+	if _swap > 0.0:
+		_swap = maxf(_swap - delta, 0.0)
+	if _reload > 0.0:
+		_reload -= delta
+		if _reload <= 0.0:
+			var g := gun()
+			var n := mini(GUNS[g].mag - loaded[g], reserve[g])
+			loaded[g] += n
+			reserve[g] -= n
+			changed.emit()
+	return _buffer > 0.0 and can_fire()
+
+
+func can_fire() -> bool:
+	var g := gun()
+	return g != "" and GUNS[g].kind != "melee" and not busy() and loaded[g] > 0 and (_cool <= 0.0 or _double > 0.0)
+
+
+func swap(to := -1) -> void:
+	if owned.size() < 2:
+		return
+	var next := (current + 1) % owned.size() if to < 0 else to
+	if next == current or next >= owned.size():
+		return
+	current = next
+	_reload = 0.0
+	if _since_shot < SWAP_WINDOW:
+		_swap = 0.0
+		_double = SWAP_WINDOW
+		_cool = 0.0
+	else:
+		_swap = SWAP_TIME
+	changed.emit()
+
+
+func reload() -> void:
+	var g := gun()
+	if g != "" and GUNS[g].kind != "melee" and _reload <= 0.0 and loaded[g] < GUNS[g].mag and reserve[g] > 0:
+		_reload = GUNS[g].reload
+		reload_started.emit(g, GUNS[g].mag - loaded[g])
+		changed.emit()
+
+
+func request_fire() -> bool:
+	## Called on a fire press. Returns true if the shot happens now; otherwise it may be buffered.
+	var g := gun()
+	if g == "" or GUNS[g].kind == "melee":
+		return false
+	if loaded[g] <= 0 and not busy():
+		reload()
+		return false
+	if can_fire():
+		return true
+	_buffer = FIRE_BUFFER
+	return false
+
+
+func loose() -> void:
+	## The bow: the nocked arrow leaves (player.gd flies it as a real Arrow).
+	var g := gun()
+	loaded[g] -= 1
+	_cool = GUNS[g].cooldown
+	_double = 0.0
+	_buffer = 0.0
+	_since_shot = 0.0
+	fired.emit(g, false)
+	changed.emit()
+
+
+func shoot(space: PhysicsDirectSpaceState3D, from: Vector3, dir: Vector3, exclude: Array[RID],
+		spread_mult := 1.0) -> Dictionary:
+	## Consume a round and cast the shot. Returns {hit, point, collider, double_tap, gun}.
+	var g := gun()
+	var spec: Dictionary = GUNS[g]
+	var dt := _double > 0.0
+	loaded[g] -= 1
+	_cool = spec.cooldown
+	_double = 0.0
+	_buffer = 0.0
+	_since_shot = 0.0
+	var s: float = spec.spread * spread_mult
+	var aim := dir
+	var out := {}
+	var hits := {}  ## collider → pellets that hit it (one hit() call each: a flinch per shot, not per pellet)
+	for i in spec.get("pellets", 1):
+		dir = (aim + Vector3(randf_range(-s, s), randf_range(-s, s), randf_range(-s, s))).normalized()
+		var q := PhysicsRayQueryParameters3D.create(from, from + dir * spec.range, 0b11, exclude)
+		var hit := space.intersect_ray(q)
+		var o := {"hit": not hit.is_empty(), "point": hit.get("position", from + dir * spec.range),
+				"collider": hit.get("collider"), "double_tap": dt, "gun": g}
+		if out.is_empty() or (o.collider and not out.collider):
+			out = o
+		var body: Object = o.collider
+		if body and body.has_method("hit"):
+			hits[body] = [hits.get(body, [0])[0] + 1, o.point]
+	for body in hits:
+		var dmg: float = spec.damage * hits[body][0] * (DOUBLE_TAP_MULT if dt else 1.0)
+		body.hit(dmg, hits[body][1], spec.flare)
+	out["pellets"] = spec.get("pellets", 1)
+	fired.emit(g, dt)
+	changed.emit()
+	return out
