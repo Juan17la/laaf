@@ -62,12 +62,16 @@ static func button(col: Control, text: String, cb: Callable) -> Button:
 		b.add_theme_stylebox_override(st, none)
 	for st in ["hover", "focus", "pressed", "hover_pressed"]:
 		b.add_theme_stylebox_override(st, bar)
-	b.focus_entered.connect(func() -> void: b.text = " ▶ " + text)
+	b.focus_entered.connect(func() -> void:
+		b.text = " ▶ " + text
+		Snd.sfx("move"))
 	b.focus_exited.connect(func() -> void: b.text = "   " + text)
 	b.mouse_entered.connect(func() -> void:
 		if not b.disabled:
 			b.grab_focus())
-	b.pressed.connect(cb)
+	b.pressed.connect(func() -> void:
+		Snd.sfx("click")
+		cb.call())
 	col.add_child(b)
 	return b
 

@@ -30,6 +30,7 @@ static func make(parent: Node, pos: Vector3, r := 3.0, life_s := 8.0) -> GasClou
 
 func _ready() -> void:
 	add_to_group("gas_clouds")
+	Snd.attach(self, "hiss", -6.0)
 	for i in int(radius * 4.0):
 		var s := Sprite3D.new()
 		s.texture = _texture()

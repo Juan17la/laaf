@@ -21,6 +21,7 @@ var _t := 0.0
 var _locked_t := -1.0  ## >= 0 once locked
 var _status := ""
 var _font: Font
+var _snd: AudioStreamPlayer  ## the static, quieter the closer the dial is to the station
 
 
 static func play(layer: Node, station := 0.62) -> RadioTuning:
@@ -38,6 +39,8 @@ func _ready() -> void:
 	_font = ThemeDB.fallback_font
 	modulate.a = 0.0
 	z_index = 10  # above HUD labels spawned later (banners, zone names)
+	_snd = Snd.sfx("radio_static", null, -6.0) as AudioStreamPlayer
+	tree_exiting.connect(func() -> void: Snd.stop(_snd))
 
 
 func _input(event: InputEvent) -> void:
@@ -53,6 +56,9 @@ func _process(delta: float) -> void:
 	var jitter := (randf() - 0.5) * 0.25 * (1.0 - _strength)
 	_meter = lerpf(_meter, clampf(_strength + jitter, 0.0, 1.0), minf(delta * 8.0, 1.0))
 	var clean := _strength > 0.85
+	if _snd and is_instance_valid(_snd):
+		_snd.volume_db = linear_to_db(0.03 + (1.0 - _strength) * 0.7) - 4.0
+		_snd.pitch_scale = 0.9 + 0.2 * _strength
 	if _locked_t >= 0.0:
 		_locked_t += delta
 		_status = "SIGNAL LOCKED"
@@ -75,6 +81,8 @@ func _process(delta: float) -> void:
 				_status += c if randf() > _strength * 0.8 else " "
 		if _clean >= HOLD:
 			_locked_t = 0.0
+			Snd.stop(_snd)
+			Snd.sfx("radio_lock", null, -3.0)
 	queue_redraw()
 
 

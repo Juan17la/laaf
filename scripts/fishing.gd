@@ -89,6 +89,7 @@ func _process(delta: float) -> void:
 				_status = "CHARGING"
 			elif released and _charge_t > 0.0:
 				state = WAIT
+				Snd.sfx("fish_cast")
 				_wait = randf_range(2.0, 3.5) + (1.0 - _cast) * 2.5 + (2.0 if legendary else 0.0)
 				_status = "..."
 		WAIT:
@@ -101,6 +102,7 @@ func _process(delta: float) -> void:
 				_status = "TOO EARLY — IT SPOOKED"
 			elif _wait <= 0.0:
 				state = BITE
+				Snd.sfx("fish_splash", null, -6.0)
 				_window = 0.45 if legendary else 0.7
 				_status = "!"
 		BITE:
@@ -109,6 +111,7 @@ func _process(delta: float) -> void:
 			if pressed:
 				_fish = OLD_TOM if legendary else _roll()
 				state = REEL
+				Snd.sfx("fish_reel")
 				_status = "HOOKED!"
 				_turn = 0.0
 			elif _window <= 0.0:
@@ -153,6 +156,8 @@ func _reel(delta: float, held: bool) -> void:
 
 
 func _finish(fish: String, tokens: int, text: String) -> void:
+	if fish != "":
+		Snd.sfx("fish_splash")
 	_result = [fish, tokens]
 	_status = text
 	_end_t = 0.0 if text != "" else SHOW  # a quit skips straight to the fade

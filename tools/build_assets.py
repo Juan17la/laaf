@@ -361,6 +361,41 @@ def M(tex, color=(1, 1, 1), scale=2.0, fit=False, emit=0.0, rough=1.0, bump=0.0,
                 bump=bump, wrinkle=wrinkle)
 
 
+def _hash(n):
+    return (n * 2654435761 % 4294967296) / 4294967296.0
+
+
+# cloth structure at texel scale -> relief 0..1 (period >= 3 px, so the normal map's central differences see it).
+# A texel is ~2-5 mm here, coarser than real thread, so the relief is fibrous noise with only a hint of pattern.
+WEAVES = {
+    "twill": lambda x, y, r: 0.2 * ((x + y) % 4 < 2) + 0.1 * _hash(x * 7 + 3) + 0.5 * r,  # denim, canvas
+    "plain": lambda x, y, r: 0.1 * ((x // 2 + y // 2) % 2) + 0.06 * (_hash(x // 2) + _hash(y // 2 + 999)) + 0.5 * r,
+    "knit": lambda x, y, r: 0.3 * abs(math.sin((x + 0.5) * math.pi / 3)) + 0.2 * _hash(x * 5 + y // 3) + 0.4 * r,
+    "felt": lambda x, y, r: 0.6 * r + 0.3 * _hash(x * 31 + y * 17),  # wool coats: fuzzy, no thread lines
+    "nylon": lambda x, y, r: 0.2 * r + 0.15 * _hash(x // 3 * 13 + y // 3 * 7),  # smooth coated shell
+    "leather": lambda x, y, r: 0.45 * r + 0.3 * _hash((x // 3) * 13 + (y // 3) * 7),  # pebbled grain
+}
+
+
+def fabric(kind, *mats, bump=0.8, wrinkle=0.004, damp=0.45):
+    """Make painted cloth materials read as real fabric: the texture is resampled at twice the resolution with
+    its blotchy low-frequency shading damped, the weave `kind` (WEAVES) is woven into colour and relief (normal
+    map), and tiling (non-fit) materials get geometric folds. Stains, seams and patterns of the base survive."""
+    for name in mats:
+        m = MATS[name]
+        tex = m["tex"]
+        if tex not in HEIGHT:
+            base, wv = TEXTURES[tex], WEAVES[kind]
+            TEXTURES[tex] = lambda x, y, a, b, r, base=base, wv=wv: \
+                mul(base(x // 2, y // 2, 0.5 + damp * (a - 0.5), b, r), 0.96 + 0.07 * wv(x, y, r))
+            HEIGHT[tex] = lambda x, y, a, b, r, wv=wv: wv(x, y, r) + 0.6 * a
+            TEX_SIZE[tex] = min(256, 2 * TEX_SIZE.get(tex, S))
+        BUMPED.add(tex)
+        m["bump"] = bump
+        if not m["fit"] and wrinkle:
+            m["wrinkle"] = wrinkle
+
+
 MATS = {
     "asphalt": M("asphalt", scale=4), "concrete": M("concrete", scale=4),
     "sidewalk": M("sidewalk", scale=2), "curb": M("concrete", (0.85, 0.85, 0.8), 2),
@@ -835,6 +870,9 @@ def bake_ao(model, radius=None, gain=None, floor=None):
 # ============================================================== glb writer
 
 def write_glb(model, path):
+    if getattr(model, "finish", None):  # last touches that need the whole model (rig.split_neck)
+        model.finish(model)
+        model.finish = None
     bin_ = bytearray()
     views, accessors, meshes, nodes = [], [], [], []
     materials, mat_idx, images, tex_idx = [], {}, [], {}
@@ -863,7 +901,9 @@ def write_glb(model, path):
             return mat_idx[name]
         m = MATS[name]
         if m["tex"] not in tex_idx:
-            images.append({"bufferView": view(texture_png(m["tex"])), "mimeType": "image/png"})
+            # named: Godot extracts images by name, so a texture keeps its own file (and import settings) when
+            # the list changes; by index, an albedo could inherit a former normal map's compression
+            images.append({"bufferView": view(texture_png(m["tex"])), "mimeType": "image/png", "name": m["tex"]})
             tex_idx[m["tex"]] = len(images) - 1
         ti = {"index": tex_idx[m["tex"]]}
         mat = {"name": name, "pbrMetallicRoughness": {
@@ -872,7 +912,8 @@ def write_glb(model, path):
         if m.get("bump"):
             key = (m["tex"], m["bump"])
             if key not in tex_idx:
-                images.append({"bufferView": view(normal_png(m["tex"], m["bump"])), "mimeType": "image/png"})
+                images.append({"bufferView": view(normal_png(m["tex"], m["bump"])), "mimeType": "image/png",
+                               "name": "%s_normal%g" % (m["tex"], m["bump"] * 10)})
                 tex_idx[key] = len(images) - 1
             mat["normalTexture"] = {"index": tex_idx[key]}
         if m["emit"]:

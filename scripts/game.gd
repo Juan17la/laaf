@@ -33,6 +33,12 @@ const ACHIEVEMENTS := {
 	"hands_on": ["Hands On", "Put an enemy down with a melee weapon or your fists."],
 }
 
+const STEP_MUSIC := {  ## base track per mission step (anything else: "explore"); enemies, bosses and cinematics override
+	"intro": "melancholy", "room": "safe", "blackout": "melancholy", "c2_intro": "melancholy",
+	"shepherd": "melancholy", "epilogue": "melancholy", "harvester": "boss"}
+
+const STEP_MOOD := {"c2_intro": "overcast", "channel7": "overcast", "zones": "overcast"}  ## the rest: night
+
 var difficulty := 1
 var mode := ""  ## "story" (menu run: saves + achievements), "dev" (menu jump), "" (the world run directly)
 var pending := {}  ## {"step": String} or a whole save dict (has "flags"), consumed by Chapter1Director
@@ -66,6 +72,7 @@ func start(step: String, run_mode: String, save := {}) -> void:
 	else:
 		run = {"damaged": false, "time": 0.0}
 	get_tree().paused = false
+	Snd.stop_music(0.5)  # drop pushed tracks / hunt flags from the previous run
 	get_tree().change_scene_to_file(WORLD)
 
 
@@ -77,6 +84,7 @@ func to_menu() -> void:
 	director = null
 	mode = ""
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	Snd.stop_music(0.5)
 	get_tree().change_scene_to_file(MENU)
 
 
@@ -94,6 +102,9 @@ func at_step(d: Node) -> void:
 	## A chapter director is starting a step: it's the one to save from; story runs autosave here.
 	director = d
 	loading = false
+	Snd.music(STEP_MUSIC.get(str(d.step), "explore"), 2.5)
+	if d.has_method("mood") and str(d.step) != "epilogue":  # (the epilogue's dawn() is its own look)
+		d.mood(STEP_MOOD.get(str(d.step), "night"), 2.0)
 	if mode == "story" and str(d.step) != "free":
 		save_game(_next_autosave(), "Autosave")
 

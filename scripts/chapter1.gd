@@ -11,7 +11,7 @@ extends Node3D
 ## physical: close shots swing round walls instead of filming through them (shot / track), the stand-in and
 ## the player it hands back to only ever stand on open ground on the right side of a wall (spot, near), and
 ## a pickup's real model is handed to the scene that stages it (claim_item → Actor.take).
-## No audio yet: every line is a subtitle, skippable with Enter / E while in a cinematic.
+## Every line is a subtitle (babbled by Audio.voice), skippable with Enter / E while in a cinematic.
 ## Dev: start mid-chapter with `-- --step=hunt` (any step name) or set start_step; "free" = no script.
 ## After the blackout the sibling Chapter2 node takes over (Chapter2Director.begin); a Chapter 2 step
 ## name (`-- --step=zones`) or `-- --chapter=2` jumps straight there (armed, key part 1); Chapter 3 the
@@ -45,6 +45,9 @@ var _grady: Actor
 var scenes_a: Ch1ScenesA
 var scenes_b: Ch1ScenesB
 var _track: Node3D
+var _sway := 0.0  ## handheld amplitude (m) of the current shot; 0 = locked off
+var _sway_t := randf() * 10.0
+var _cin_music := false  ## a cinematic's music is pushed (Snd.push_music)
 var _track_offset := Vector3.ZERO
 var _track_look := Vector3.ZERO
 var _stand_in: Actor
@@ -149,6 +152,15 @@ func _setup_world() -> void:
 	for n in get_parent().find_children("*", "Node3D", true, false):
 		if n.scene_file_path.ends_with("ext_tall_grass.glb"):
 			player.hidden_spots.append(n.global_position)
+	# a failing sodium lamp over room 6's door: warm against the cold night, and a reason to be afraid of the dark
+	var lamp := OmniLight3D.new()
+	lamp.light_color = Color(1.0, 0.7, 0.35)
+	lamp.light_energy = 1.6
+	lamp.omni_range = 8.0
+	lamp.set_script(load("res://scripts/flicker.gd"))
+	lamp.set("chance", 0.12)
+	add_child(lamp)
+	lamp.global_position = Vector3(-94.8, 2.6, 49.0)
 	# Grady waits at his store door (square)
 	_grady = actor("res://models/char_grady.glb", Vector3(14, 0, -17.6), 0.0)
 
@@ -235,6 +247,17 @@ func cinematic(on: bool) -> void:
 	## Takes the camera and the controls away from the player (and gives them back).
 	player.controls_enabled = not on
 	_track = null
+	_sway = 0.0
+	cam.fov = 60.0  # a telephoto / wide shot never leaks into the next scene
+	cam.h_offset = 0.0
+	cam.v_offset = 0.0
+	hud.letterbox(on)
+	if on != _cin_music:  # the score follows the camera: a melancholy theme under every cinematic
+		_cin_music = on
+		if on:
+			Snd.push_music("melancholy", 2.0)
+		else:
+			Snd.pop_music(2.5)
 	if on:
 		player.velocity = Vector3.ZERO
 		cam.current = true
@@ -253,14 +276,19 @@ func objective(text: String, target: Variant = null) -> void:
 	hud.objective(text, target)
 
 
-func shot(from: Vector3, look: Vector3, to := Vector3.INF, time := 6.0) -> void:
+func shot(from: Vector3, look: Vector3, to := Vector3.INF, time := 6.0, fov := 0.0, sway := 0.012) -> void:
 	## Cuts the cinematic camera to `from` looking at `look`; optionally dollies to `to` over `time`
-	## seconds (not awaited). Cancels any previous move or track. Close shots are staged around wherever the
+	## seconds (eased in and out, not awaited). `fov` > 0 sets the lens (a close-up ~40, an establishing wide ~72;
+	## cinematic() puts it back to 60), `sway` is the handheld wobble in metres (0 = locked off, 0.03 = tension).
+	## Cancels any previous move or track. Close shots are staged around wherever the
 	## player happens to stand, so if a wall, door or shelf gets between the lens and the subject the camera
 	## swings round the subject to the nearest clear angle (_frame).
 	_track = null
+	_sway = sway
 	if _cam_tw:
 		_cam_tw.kill()
+	if fov > 0.0:
+		cam.fov = fov
 	var swing := _frame(from, look)
 	from = _swung(from, look, swing)
 	if to != Vector3.INF:
@@ -270,7 +298,7 @@ func shot(from: Vector3, look: Vector3, to := Vector3.INF, time := 6.0) -> void:
 	cam.global_position = from
 	cam.look_at(look)
 	if to != Vector3.INF:
-		_cam_tw = create_tween()
+		_cam_tw = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 		_cam_tw.tween_method(func(t: float) -> void:
 			cam.global_position = from.lerp(to, t)
 			cam.look_at(look), 0.0, 1.0, time)
@@ -285,13 +313,16 @@ func track(node: Node3D, offset: Vector3, look_offset := Vector3(0, 1.5, 0)) -> 
 	_track_look = look_offset
 
 
-func ots(speaker: Node3D, listener: Node3D, side := 1.0) -> void:
-	## Over-the-shoulder cut for dialogue: camera behind `listener`'s shoulder, framing `speaker`.
+func ots(speaker: Node3D, listener: Node3D, side := 1.0, push := 0.3) -> void:
+	## Over-the-shoulder cut for dialogue: camera behind and above `listener`'s shoulder, framing `speaker`
+	## through a 42 degree lens (so the foreground head stays a sliver, not half the frame). `push` (metres, default a slow 0.3) is the
+	## creep toward the speaker over the line; 0 holds still.
 	var a := listener.global_position + Vector3.UP * 1.6
 	var b := speaker.global_position + Vector3.UP * 1.55
 	var back := (a - b).normalized()
 	var right := back.cross(Vector3.UP).normalized()
-	shot(a + back * 0.9 + right * 0.45 * side + Vector3.UP * 0.1, b)
+	var from := a + back * 1.4 + right * 0.55 * side + Vector3.UP * 0.25
+	shot(from, b, from - back * push if push > 0.0 else Vector3.INF, 4.0, 42.0)
 
 
 func wait(sec: float) -> Signal:
@@ -328,7 +359,11 @@ func release_stand_in() -> void:
 	_stand_in = null
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if cam and cam.current and _sway > 0.0:  # handheld: slow two-frequency drift of the frustum, never touches the aim
+		_sway_t += delta
+		cam.h_offset = _sway * (sin(_sway_t * 1.3) + 0.5 * sin(_sway_t * 3.1 + 1.0))
+		cam.v_offset = _sway * 0.7 * (sin(_sway_t * 1.7 + 2.0) + 0.5 * sin(_sway_t * 2.3))
 	if _track and is_instance_valid(_track):
 		var look := _track.global_position + _track_look
 		var goal := _track.global_position + _track_offset
@@ -336,6 +371,62 @@ func _process(_delta: float) -> void:
 			goal = _swung(goal, look, INF)
 		cam.global_position = cam.global_position.lerp(goal, 0.08)
 		cam.look_at(look)
+
+
+# ------------------------------------------------------------------ mood + lighting
+
+const MOODS := {  ## Environment + moon look per scene; "night" is whatever hollowmere.tscn authored (captured once)
+	"overcast": {"background_color": Color(0.46, 0.5, 0.54), "ambient_light_color": Color(0.6, 0.66, 0.72),
+		"ambient_light_energy": 1.0, "fog_light_color": Color(0.5, 0.56, 0.6), "fog_density": 0.014,
+		"volumetric_fog_density": 0.01, "moon_color": Color(0.9, 0.9, 0.85), "moon_energy": 0.5},
+	"interior": {"ambient_light_energy": 0.45, "fog_density": 0.008, "volumetric_fog_density": 0.006},
+	"dim": {"ambient_light_energy": 0.3, "moon_energy": 0.08},
+}
+var _night := {}
+
+
+func mood(name: String, time := 2.0) -> void:
+	## Tweens the world's look: "night" (default), "overcast" (the day scenes: 09:00 / 15:00 must not look like
+	## midnight), "interior", "dim" (a blackout). Not awaited.
+	var env: Environment = get_parent().get_node("WorldEnvironment").environment
+	var moon: DirectionalLight3D = get_parent().get_node("Moon")
+	if _night.is_empty():
+		for k in ["background_color", "ambient_light_color", "ambient_light_energy", "fog_light_color", "fog_density",
+				"volumetric_fog_density"]:
+			_night[k] = env.get(k)
+		_night["moon_color"] = moon.light_color
+		_night["moon_energy"] = moon.light_energy
+	var look: Dictionary = _night.duplicate()
+	look.merge(MOODS.get(name, {}), true)
+	var tw := create_tween().set_parallel()
+	for k in look:
+		if k.begins_with("moon"):
+			tw.tween_property(moon, "light_" + k.trim_prefix("moon_"), look[k], time)
+		else:
+			tw.tween_property(env, k, look[k], time)
+
+
+func key_light(pos: Vector3, color: Color, energy: float, range_m: float, look := Vector3.INF, angle := 55.0, fade := 1.5) -> Light3D:
+	## A set light that fades in (a SpotLight3D aimed at `look`, or an OmniLight3D without it). It stays: arenas
+	## stay lit through the fight.
+	var l: Light3D
+	if look != Vector3.INF:
+		var sp := SpotLight3D.new()
+		sp.spot_range = range_m
+		sp.spot_angle = angle
+		l = sp
+	else:
+		var om := OmniLight3D.new()
+		om.omni_range = range_m
+		l = om
+	l.light_color = color
+	l.light_energy = 0.0
+	add_child(l)
+	l.global_position = pos
+	if look != Vector3.INF:
+		l.look_at(look, Vector3.RIGHT if absf((look - pos).normalized().y) > 0.99 else Vector3.UP)  # straight down is fine too
+	create_tween().tween_property(l, "light_energy", energy, fade)
+	return l
 
 
 # ------------------------------------------------------------------ staging kept physical

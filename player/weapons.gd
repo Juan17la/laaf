@@ -17,12 +17,12 @@ const DOUBLE_TAP_MULT := 1.5
 const SWAP_TIME := 0.35  ## normal holster/draw time
 const FIRE_BUFFER := 0.15
 
-const GUNS := {
-	"revolver": {"name": "Revolver", "kind": "gun", "hold": "pistol", "damage": 34.0, "cooldown": 0.32, "mag": 6,
+const GUNS := {  # gun damage: +15% over the first balance pass (34 / 20 / 11)
+	"revolver": {"name": "Revolver", "kind": "gun", "hold": "pistol", "damage": 39.1, "cooldown": 0.32, "mag": 6,
 			"reload": 1.5, "spread": 0.012, "noise": 40.0, "range": 90.0, "flare": false, "color": Color(1.0, 0.85, 0.5)},
-	"flare": {"name": "Flare gun", "kind": "gun", "hold": "pistol", "damage": 20.0, "cooldown": 0.6, "mag": 1,
+	"flare": {"name": "Flare gun", "kind": "gun", "hold": "pistol", "damage": 23.0, "cooldown": 0.6, "mag": 1,
 			"reload": 1.1, "spread": 0.004, "noise": 18.0, "range": 60.0, "flare": true, "color": Color(1.0, 0.25, 0.1)},
-	"shotgun": {"name": "Shotgun", "kind": "gun", "hold": "long", "damage": 11.0, "pellets": 7, "cooldown": 0.45,
+	"shotgun": {"name": "Shotgun", "kind": "gun", "hold": "long", "damage": 12.65, "pellets": 7, "cooldown": 0.45,
 			"mag": 2, "reload": 2.2, "spread": 0.07, "noise": 55.0, "range": 32.0, "flare": false,
 			"color": Color(1.0, 0.7, 0.4)},
 	"bow": {"name": "Hunting bow", "kind": "bow", "hold": "bow", "damage": 70.0, "cooldown": 0.3, "mag": 1,

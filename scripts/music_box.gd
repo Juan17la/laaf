@@ -56,6 +56,7 @@ func chime() -> void:
 	_cd = 2.0
 	_idle = 3.0
 	_pop(1.0, 0.6)
+	Snd.sfx("musicbox", global_position, 2.0)
 	get_tree().call_group("enemies", "hear", global_position, HEAR)
 
 
@@ -71,4 +72,5 @@ func _silence(_by: Node) -> void:
 	if not playing:
 		return
 	playing = false
+	Snd.sfx("thud", global_position, -6.0)
 	silenced.emit()

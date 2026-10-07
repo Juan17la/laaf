@@ -42,7 +42,7 @@ static func spawn_at(parent: Node, pos: Vector3, yaw := 0.0) -> Harvester:
 	var h := Enemy.spawn(parent, "res://models/char_boss.glb", pos, yaw, {
 		"display_name": "The Harvester", "boss": true, "max_health": 900.0, "walk_speed": 1.3,
 		"run_speed": 2.5, "melee_damage": 38.0, "melee_range": 2.8, "windup": 1.0, "mark_gain": 10.0,
-		"sight_range": 70.0, "fov_deg": 220.0, "flare_stun": 0.0, "hearing": 2.0}, Harvester.new()) as Harvester
+		"sight_range": 70.0, "fov_deg": 220.0, "flare_stun": 0.0, "hearing": 2.0, "agile": false}, Harvester.new()) as Harvester
 	var col := h.get_child(0) as CollisionShape3D
 	var cap := col.shape as CapsuleShape3D
 	cap.radius = 0.6
@@ -68,6 +68,7 @@ func _ready() -> void:
 	_ring.mesh = disc
 	_ring.position.y = 0.05
 	add_child(_ring)
+	Snd.attach(self, "harvester", 2.0)
 
 
 func _omni(c: Color, energy: float, r: float, y: float) -> OmniLight3D:

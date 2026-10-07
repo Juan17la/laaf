@@ -31,7 +31,7 @@ signal hid(pos: Vector3)  ## the player just became hidden (is_hidden() went tru
 @export var jump_cost := 10.0
 @export var slide_cost := 15.0
 @export var stamina_regen := 24.0
-@export var health_max := 100.0
+@export var health_max := 200.0  ## doubled: fights are fast and enemies adapt
 @export var regen_cap := 0.3  ## health regenerates on its own only up to this fraction
 @export var mouse_sensitivity := 0.0025
 @export var stick_sensitivity := 3.0
@@ -62,14 +62,21 @@ const BOW_TIPS := [Vector3(0, 0.62, 0.1), Vector3(0, -0.62, 0.1)]  ## where the 
 const BOW_BRACE := 0.16  ## string at rest (bow space z); a full draw pulls the nock BOW_DRAW further back
 const BOW_DRAW := 0.45
 ## Melee swings: weapon poses in model space (origin = right-hand grip, head direction) at strike progress t.
+## The bat sweeps flat around the right side (pointing right, then at the target on contact, then left) and wraps
+## over the left shoulder; the axe goes up behind the head, over the top and down through the target to the shins.
 const SWINGS := {
-	"swing": [[0.0, Vector3(-0.12, 1.25, 0.3), Vector3(0.1, 0.9, 0.3)], [0.3, Vector3(-0.28, 1.38, -0.02), Vector3(-0.55, 0.45, -0.7)],
-		[0.45, Vector3(-0.02, 1.22, 0.42), Vector3(0.05, 0.08, 1.0)], [0.7, Vector3(0.22, 1.2, 0.22), Vector3(0.85, 0.1, -0.45)],
+	"swing": [[0.0, Vector3(-0.12, 1.25, 0.3), Vector3(0.1, 0.9, 0.3)], [0.3, Vector3(-0.26, 1.38, 0.14), Vector3(-0.5, 0.55, -0.67)],
+		[0.39, Vector3(-0.24, 1.22, 0.3), Vector3(-0.95, 0.12, 0.25)], [0.45, Vector3(-0.02, 1.22, 0.45), Vector3(0.05, 0.08, 1.0)],
+		[0.52, Vector3(0.24, 1.24, 0.38), Vector3(0.95, 0.05, 0.3)], [0.6, Vector3(0.4, 1.35, 0.3), Vector3(0.55, 0.5, -0.65)],
 		[1.0, Vector3(-0.12, 1.25, 0.3), Vector3(0.1, 0.9, 0.3)]],
-	"chop": [[0.0, Vector3(-0.12, 1.25, 0.3), Vector3(0.1, 0.9, 0.3)], [0.35, Vector3(-0.08, 1.58, -0.02), Vector3(0.0, 0.55, -0.85)],
-		[0.5, Vector3(-0.03, 1.2, 0.44), Vector3(0.0, -0.1, 1.0)], [0.7, Vector3(0.0, 0.98, 0.36), Vector3(0.0, -0.85, 0.5)],
-		[1.0, Vector3(-0.12, 1.25, 0.3), Vector3(0.1, 0.9, 0.3)]],
+	"chop": [[0.0, Vector3(-0.12, 1.25, 0.3), Vector3(0.1, 0.9, 0.3)], [0.18, Vector3(-0.1, 1.68, 0.3), Vector3(0.0, 0.95, -0.25)],
+		[0.35, Vector3(-0.05, 1.88, -0.14), Vector3(0.0, 0.4, -0.92)],
+		[0.43, Vector3(-0.05, 1.8, 0.34), Vector3(0.0, 0.9, 0.45)], [0.5, Vector3(-0.03, 1.22, 0.58), Vector3(0.0, -0.1, 1.0)],
+		[0.65, Vector3(0.0, 0.92, 0.52), Vector3(0.0, -0.85, 0.5)], [1.0, Vector3(-0.12, 1.25, 0.3), Vector3(0.1, 0.9, 0.3)]],
 }
+## Where each swing turns around (wind-up top, follow-through end): it eases to a stop only there, and is fastest
+## midway between, on the contact key (hit_at).
+const SWING_TURNS := {"swing": [0.0, 0.3, 0.6, 1.0], "chop": [0.0, 0.35, 0.65, 1.0]}
 
 var stamina := stamina_max
 var health := health_max
@@ -101,6 +108,8 @@ var _jump_buf := 0.0
 var _was_air := false
 var _fall_speed := 0.0
 var _noise_t := 0.0
+var _stride := 0.0  ## metres walked since the last footfall
+var _beat_t := 0.0
 var _hurt_cd := 0.0
 var _aim_face := 0.0  ## keeps facing the aim briefly after a hip-fire shot
 var _gun_meshes := {}
@@ -162,6 +171,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("flashlight"):
 		flashlight.visible = not flashlight.visible
+		Snd.sfx("click", null, -8.0, 0.8)
 	elif event.is_action_pressed("shoulder_swap"):
 		_shoulder = -_shoulder
 	elif event.is_action_pressed("mask"):
@@ -188,6 +198,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_loose()
 		elif weapons.request_fire():
 			_fire()
+		elif weapons.loaded.get(weapons.gun(), 1) <= 0 and weapons.reserve.get(weapons.gun(), 1) <= 0:
+			Snd.sfx("dry")  # empty and nothing to reload with
 	elif event.is_action_pressed("melee") and carrying == "":
 		_melee()
 	elif event.is_action_pressed("reload"):
@@ -243,6 +255,7 @@ func _physics_process(delta: float) -> void:
 		global_position = _spawn
 		velocity = Vector3.ZERO
 	_hurt_cd = maxf(_hurt_cd - delta, 0.0)
+	_heartbeat(delta)
 	_aim_face = maxf(_aim_face - delta, 0.0)
 	var h := is_hidden()
 	if h and not _was_hidden:
@@ -285,6 +298,7 @@ func _physics_process(delta: float) -> void:
 			_jump_buf = 0.0
 			_coyote = 0.0
 			noise(5.0)
+			Snd.sfx("jump", null, -6.0)
 
 	var speed := crouch_speed if crouching else (sprint_speed if sprinting else walk_speed)
 	if aiming:
@@ -325,9 +339,11 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 	if is_on_floor() and _was_air and _fall_speed > 3.0:
 		noise(6.0)  # landing thud
+		Snd.sfx("land", global_position, minf(_fall_speed - 8.0, 0.0) * 0.5)
 	_was_air = not is_on_floor()
 
 	_emit_step_noise(delta, Vector2(velocity.x, velocity.z).length(), sprinting)
+	_footsteps(delta, Vector2(velocity.x, velocity.z).length(), sprinting)
 	_face(delta)
 	_animate(delta)
 	_update_camera(delta)
@@ -383,6 +399,7 @@ func _start_roll() -> void:
 	model.rotation.y = atan2(_roll_dir.x, _roll_dir.z)
 	stamina -= roll_cost
 	noise(6.0)
+	Snd.sfx("jump", null, -2.0, 0.8)
 
 
 func _start_slide() -> void:
@@ -412,6 +429,7 @@ func _animate(delta: float) -> void:
 	anim.crouching = crouching and _slide_left <= 0.0
 	anim.roll = 1.0 - _roll_left / roll_time if _roll_left > 0.0 else -1.0
 	anim.airborne = not is_on_floor() and not _busy and _roll_left <= 0.0
+	anim.vertical = velocity.y
 	anim.sliding = _slide_left > 0.0
 	anim.aim = move_toward(anim.aim, 1.0 if (aiming or _aim_face > 0.0) else 0.0, delta * 8.0)
 	anim.aim_pitch = -pitch.rotation.x
@@ -488,6 +506,7 @@ func _fire() -> void:
 	_aim_face = 0.6
 	anim.recoil = 1.0
 	noise(Weapons.GUNS[result.gun].noise)
+	Snd.sfx("gun_" + str(result.gun), global_position + Vector3.UP * 1.4)
 	_tracer(result.point, Weapons.GUNS[result.gun].color, result.gun == "flare")
 	if result.collider and result.collider.has_method("hit"):
 		hud.hit_marker(result.double_tap)
@@ -503,6 +522,7 @@ func _on_fired(gun: String, double_tap: bool) -> void:
 func _on_reload(gun: String, spent: int) -> void:
 	## The revolver's cylinder swings out: the spent brass drops.
 	var m: Node3D = _gun_meshes.get(gun)
+	Snd.sfx("reload", global_position, -4.0)
 	if gun == "revolver" and spent > 0 and m:
 		ItemFx.burst(get_parent(), m.to_global(Vector3(0, 0.05, -0.05)), "casings", Vector3.DOWN, spent)
 	elif gun == "shotgun" and spent > 0 and m:  # the barrels break open: the red hulls pop out
@@ -630,11 +650,16 @@ func _hold(delta: float) -> void:
 		t.R = Transform3D(Basis(), Vector3(-0.19, 1.16, 0.42) + drop)
 		t.L = Transform3D(Basis(), Vector3(0.19, 1.16, 0.42) + drop)
 	elif _strike_t >= 0.0 and anim.strike_style in ["swing", "chop"]:
-		var w := _swing_pose(anim.strike_style, _strike_t, drop)
+		# eases in from wherever the weapon was held (on the shoulder, or up ready)
+		var w := _melee_hold(sp.style, drop, ready).interpolate_with(_swing_pose(anim.strike_style, _strike_t, drop),
+			smoothstep(0.0, 0.2, _strike_t))
 		t.R = w * LONG_GRIP.affine_inverse()
-		t.L = w * Transform3D(Basis(), SUPPORT.get(id, Vector3(0, 0, -0.3))) * LONG_GRIP.affine_inverse()
+		# the axe's hands slide together for the chop (the far hand couldn't reach overhead), apart again after
+		var slide := 1.0 - 0.6 * smoothstep(0.0, 0.3, _strike_t) * (1.0 - smoothstep(0.65, 1.0, _strike_t)) \
+			if anim.strike_style == "chop" else 1.0
+		t.L = w * Transform3D(Basis(), SUPPORT.get(id, Vector3(0, 0, -0.3)) * slide) * LONG_GRIP.affine_inverse()
 	elif _strike_t >= 0.0 and sp.hold == "long":  # butt-stroke: the whole gun drives forward
-		var w := _long_pose(ad, drop, 1.0)
+		var w := _long_pose(ad, drop, lerpf(ready, 1.0, smoothstep(0.0, 0.15, _strike_t)))  # up from low ready first
 		w.origin += w.basis * Vector3(0, 0, -0.35) * sin(minf(_strike_t / _strike.hit_at, 1.0) * PI * 0.5) \
 			* (1.0 - maxf(_strike_t - _strike.hit_at, 0.0) / (1.0 - _strike.hit_at))
 		t.R = w * LONG_GRIP.affine_inverse()
@@ -643,9 +668,12 @@ func _hold(delta: float) -> void:
 		t = _guard(drop)
 		var k := "L" if anim.strike_style == "jab_l" else "R"
 		var h: float = _strike.hit_at
-		var out := ease(clampf(_strike_t / h, 0.0, 1.0), 0.5) if _strike_t < h else 1.0 - clampf((_strike_t - h) / (1.0 - h), 0.0, 1.0)
+		# straight out from the guard, accelerating into the target, the fist turning over (palm down) as it lands;
+		# the recoil snaps back quicker still
+		var f := clampf(_strike_t / h, 0.0, 1.0)
+		var out := f * f * (1.5 - 0.5 * f) if _strike_t < h else 1.0 - smoothstep(h, h + 0.5 * (1.0 - h), _strike_t)
 		var sh := Vector3(0.2 if k == "L" else -0.2, 1.46, 0.0) + drop
-		var fist := Transform3D(_fist(ad), sh + ad * 0.6 - Vector3(sh.x * 0.7, 0.06, 0))
+		var fist := Transform3D(Basis(ad, (1.4 if k == "L" else -1.4) * out) * _fist(ad), sh + ad * 0.6 - Vector3(sh.x * 0.7, 0.06, 0))
 		t[k] = (t[k] as Transform3D).interpolate_with(fist, out)
 		if sp.hold == "bow":
 			t.L = _bow_pose(ad, drop, 0.0) * GRIP.affine_inverse()
@@ -658,10 +686,7 @@ func _hold(delta: float) -> void:
 				t.R = w * LONG_GRIP.affine_inverse()
 				t.L = w * Transform3D(Basis(), SUPPORT[id]) * LONG_GRIP.affine_inverse()
 			"melee":
-				var chop: bool = sp.style == "chop"
-				# resting on the shoulder: head up and out past it, not through it
-				var rest := Transform3D(_toward(Vector3(-0.3, 0.9, -0.25).normalized(), chop), Vector3(-0.21, 1.17, 0.24) + drop)
-				var w := rest.interpolate_with(_swing_pose(sp.style, 0.0, drop), ready)
+				var w := _melee_hold(sp.style, drop, ready)
 				t.R = w * LONG_GRIP.affine_inverse()
 				if ready > 0.05:
 					t.L = w * Transform3D(Basis(), SUPPORT[id]) * LONG_GRIP.affine_inverse()
@@ -672,7 +697,7 @@ func _hold(delta: float) -> void:
 				if ready > 0.05:  # the right hand hooks the string at the nock
 					t.R = w * Transform3D(Basis(), Vector3(0.012, -0.015, BOW_BRACE + BOW_DRAW * _draw)) * GRIP.affine_inverse()
 			"fists":
-				if aiming:
+				if aiming or _aim_face > 0.0:  # (and just after a punch: the guard comes back, not the gun-aim arm)
 					t = _guard(drop)
 	if anim.throw >= 0.0:
 		t.erase("L")  # the left hand is busy throwing
@@ -686,11 +711,17 @@ func _hold(delta: float) -> void:
 
 
 func _toward(dir: Vector3, flip := false) -> Basis:
-	## Basis with -Z along dir and +Y as close to up (flip: down) as it gets.
-	var up := Vector3.DOWN if flip else Vector3.UP
-	if absf(dir.normalized().dot(up)) > 0.95:
-		up = Vector3.BACK
-	return Basis.looking_at(dir, up)
+	## Basis with -Z along dir and +Y as close to up as it gets; flip (the axe, swung over the top): +X kept to the
+	## right and +Y down when level, which stays continuous through vertical. Straight up / down only (+Y) or sideways
+	## only (flip) fall back to BACK / up.
+	var z := -dir.normalized()
+	if flip:
+		var x := Vector3.RIGHT - z * z.x
+		if x.length() < 0.03:
+			return Basis.looking_at(dir, Vector3.DOWN)
+		x = x.normalized()
+		return Basis(x, z.cross(x), z)
+	return Basis.looking_at(dir, Vector3.BACK if absf(z.y) > 0.9995 else Vector3.UP)
 
 
 func _fist(dir: Vector3) -> Basis:
@@ -726,17 +757,38 @@ func _bow_pose(ad: Vector3, drop: Vector3, k: float) -> Transform3D:
 	return low.interpolate_with(aimed, k)
 
 
+func _melee_hold(style: String, drop: Vector3, ready: float) -> Transform3D:
+	## Axe / bat at rest on the shoulder (head up and out past it, not through it), or up ready (ready = 1).
+	var rest := Transform3D(_toward(Vector3(-0.3, 0.9, -0.25).normalized(), style == "chop"), Vector3(-0.21, 1.17, 0.24) + drop)
+	return rest.interpolate_with(_swing_pose(style, 0.0, drop), ready)
+
+
 func _swing_pose(style: String, t: float, drop: Vector3) -> Transform3D:
-	## Axe / bat through its SWINGS keys at progress t.
-	var keys: Array = SWINGS[style]
+	## Axe / bat at progress t: a smooth (Catmull-Rom / squad) path through its SWINGS keys, timed to ease in and out of
+	## each SWING_TURNS point so the head accelerates into the contact and decelerates through the follow-through.
+	var turns: Array = SWING_TURNS[style]
 	var i := 0
-	while i < keys.size() - 2 and t > keys[i + 1][0]:
+	while i < turns.size() - 2 and t > turns[i + 1]:
 		i += 1
-	var a: Array = keys[i]
-	var b: Array = keys[i + 1]
-	var f := smoothstep(a[0], b[0], t)
-	var dir := (a[2] as Vector3).normalized().slerp((b[2] as Vector3).normalized(), f)
-	return Transform3D(_toward(dir, style == "chop"), (a[1] as Vector3).lerp(b[1], f) + drop)
+	var s := lerpf(turns[i], turns[i + 1], smoothstep(turns[i], turns[i + 1], t))
+	var keys: Array = SWINGS[style]
+	var j := 0
+	while j < keys.size() - 2 and s > keys[j + 1][0]:
+		j += 1
+	var a: Array = keys[j]
+	var b: Array = keys[j + 1]
+	var pa: Array = keys[j - 1] if j > 0 else [2.0 * a[0] - b[0], a[1], a[2]]
+	var pb: Array = keys[j + 2] if j + 2 < keys.size() else [2.0 * b[0] - a[0], b[1], b[2]]
+	var f := clampf((s - a[0]) / (b[0] - a[0]), 0.0, 1.0)
+	var bt: float = b[0] - a[0]
+	var pt: float = pa[0] - a[0]
+	var nt: float = pb[0] - a[0]
+	var pos := (a[1] as Vector3).cubic_interpolate_in_time(b[1], pa[1], pb[1], f, bt, pt, nt)
+	# orientations, not directions, are interpolated: a handle swinging past vertical keeps its twist
+	var flip := style == "chop"
+	var q := Quaternion(_toward(a[2], flip)).spherical_cubic_interpolate_in_time(Quaternion(_toward(b[2], flip)),
+		Quaternion(_toward(pa[2], flip)), Quaternion(_toward(pb[2], flip)), f, bt, pt, nt)
+	return Transform3D(Basis(q), pos + drop)
 
 
 func _update_bow() -> void:
@@ -763,6 +815,7 @@ func _loose() -> void:
 	Arrow.fire(get_parent(), from, throw_target(Weapons.GUNS.bow.range), Weapons.GUNS.bow.damage * k, self,
 		lerpf(18.0, 46.0, k))
 	weapons.loose()
+	Snd.sfx("bow", global_position + Vector3.UP * 1.4)
 	_draw = 0.0
 	_aim_face = 0.6
 	noise(Weapons.GUNS.bow.noise)
@@ -788,6 +841,7 @@ func _melee() -> void:
 	model.rotation.y = atan2(fwd.x, fwd.z)  # swing where the camera looks
 	_aim_face = float(sp.time) + 0.2
 	noise(float(sp.noise) * 0.4)
+	Snd.sfx("swing", global_position, -3.0, randf_range(0.9, 1.1) * (0.85 if sp.style in ["swing", "chop"] else 1.0))
 
 
 func _advance_strike(delta: float) -> void:
@@ -795,7 +849,7 @@ func _advance_strike(delta: float) -> void:
 		return
 	if _rebound > 0.0:  # the blow jars back up the arms toward the windup, then the strike ends
 		_rebound -= delta
-		_strike_t = maxf(_strike_t - delta * 2.4, 0.25)
+		_strike_t = maxf(_strike_t - delta * 2.4, 0.0)  # back through the wind-up to ready, so it ends where the hold is
 		anim.strike = _strike_t
 		if _rebound <= 0.0:
 			_strike_t = -1.0
@@ -850,9 +904,10 @@ func _melee_hit() -> void:
 		body.hit(dmg, at)
 		if body.get("state") == Enemy.State.DEAD:
 			G.send("unlock", ["hands_on"])
-		if float(sp.stun) >= 0.5 and body.has_method("stun"):
-			body.stun(float(sp.stun) * (0.4 if body.get("boss") else 1.0))
+		if float(sp.stun) >= 0.5 and body.has_method("stagger"):  # resisted: no stun-locking (Enemy.stagger)
+			body.stagger(float(sp.stun) * (0.4 if body.get("boss") else 1.0))
 	if landed:
+		Snd.sfx("punch" if sp.style == "jab" else "melee_hit", chest + fwd)
 		hud.hit_marker(false)
 		pitch.rotation.x = clampf(pitch.rotation.x - 0.02, -1.2, 0.8)  # the jolt runs up the arms
 		noise(float(sp.noise))
@@ -862,6 +917,7 @@ func _melee_hit() -> void:
 	_combo = 0
 	var wall := _ray(chest, chest + fwd * float(sp.reach))
 	if wall:
+		Snd.sfx("thud", wall.position, -4.0)
 		ItemFx.burst(get_parent(), wall.position, "thud", wall.normal)
 		noise(float(sp.noise) * 0.7)
 		if heavy:
@@ -906,7 +962,8 @@ func hurt(amount: float, _from := Vector3.ZERO, mark_gain := 0.0) -> bool:
 	if dead or not controls_enabled or rolling_invulnerable() or _hurt_cd > 0.0:
 		return false
 	_hurt_cd = 0.25
-	amount *= G.settings().hurt  # difficulty
+	Snd.sfx("hurt", global_position + Vector3.UP * 1.5)
+	amount *= G.settings().hurt * 0.8  # difficulty; 0.8 = global -20% balance pass
 	G.send("hurt", [amount])
 	health -= amount
 	mark = clampf(mark + mark_gain * mark_resist, 0.0, 100.0)
@@ -965,6 +1022,29 @@ func noise(radius: float) -> void:
 	get_tree().call_group("enemies", "hear", global_position, radius)
 
 
+func _footsteps(delta: float, speed: float, sprinting: bool) -> void:
+	## One footfall per stride walked; the surface (from the floor collider's name) picks the sound.
+	if speed < 0.5 or not is_on_floor() or _slide_left > 0.0 or _roll_left > 0.0:
+		_stride = 1.2  # the first footfall comes soon after setting off
+		return
+	_stride += speed * delta
+	if _stride < (1.0 if crouching else (2.0 if sprinting else 1.55)):
+		return
+	_stride = 0.0
+	Snd.step(self, -9.0 if crouching else (-1.0 if sprinting else -5.0))
+
+
+func _heartbeat(delta: float) -> void:
+	## Under 40% health a heartbeat thuds, faster the lower it gets.
+	var frac := health / health_max
+	if dead or frac > 0.4 or not controls_enabled:
+		return
+	_beat_t -= delta
+	if _beat_t <= 0.0:
+		_beat_t = lerpf(0.5, 1.1, frac / 0.4)
+		Snd.sfx("heartbeat", null, lerpf(0.0, -8.0, frac / 0.4))
+
+
 func _emit_step_noise(delta: float, speed: float, sprinting: bool) -> void:
 	_noise_t -= delta
 	if _noise_t > 0.0 or speed < 0.5 or not is_on_floor():
@@ -1007,6 +1087,7 @@ func toggle_mask() -> void:
 	if not gas_mask:
 		return
 	mask_on = not mask_on
+	Snd.sfx("item_use", null, -6.0, 0.7)
 	hud.banner("MASK ON" if mask_on else "MASK OFF", Color(0.6, 0.9, 0.7), 0.4)
 
 
@@ -1065,6 +1146,7 @@ func drink_tea() -> void:
 		return
 	teas -= 1
 	mark = maxf(mark - 15.0, 0.0)
+	Snd.sfx("item_use")
 	hud.banner("ELENA'S TEA  ·  MARK -15%", Color(0.8, 0.9, 0.6), 1.0)
 
 
@@ -1137,6 +1219,7 @@ func _land(b, land: Callable) -> void:  # untyped: a freed body must still bind
 
 func _shatter(pos: Vector3) -> void:
 	get_tree().call_group("enemies", "hear", pos, 14.0)
+	Snd.sfx("glass", pos)
 	ItemFx.burst(get_parent(), pos + Vector3.UP * 0.05, "shards")
 	ItemFx.burst(get_parent(), pos + Vector3.UP * 0.05, "splash")
 
@@ -1170,7 +1253,7 @@ func _takedown(e: Node3D) -> void:
 	tw.tween_callback(func() -> void:
 		e.takedown()
 		hud.banner("TAKEDOWN", Color(0.9, 0.85, 0.7), 0.5))
-	tw.tween_property(anim, "attack", 1.0, 0.15)  # ...and strike
+	tw.tween_property(anim, "attack", 1.0, 0.3)  # ...and strike (as long as an enemy's, so the arms don't whip)
 	tw.tween_callback(func() -> void:
 		anim.attack = -1.0
 		_busy = false)

@@ -96,6 +96,7 @@ func _ready() -> void:
 	add_child(crt)
 	_next_shot()
 	_main()
+	Snd.music("menu", 2.5)
 
 
 func _build_town() -> void:
@@ -226,6 +227,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		if (e is InputEventKey or e is InputEventJoypadButton or e is InputEventMouseButton) and e.is_pressed() \
 				and not e.is_echo():
 			_title = false
+			Snd.sfx("save", null, -8.0)
 			vp.set_input_as_handled()
 		return
 	if e.is_action_pressed("ui_down"):
@@ -263,11 +265,13 @@ func _move(d: int) -> void:
 		if _items[i][3]:
 			break
 	_sel = i
+	Snd.sfx("move")
 	_top = clampi(_top, _sel - ROWS + 1, _sel)
 
 
 func _activate() -> void:
 	if _sel < _items.size() and _items[_sel][3]:
+		Snd.sfx("click")
 		(_items[_sel][2] as Callable).call()
 
 

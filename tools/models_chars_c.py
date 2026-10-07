@@ -205,7 +205,8 @@ def face(X, Y, a, r, skin, iris, brow, lips, hairline=0.21, hair=None, stubble=0
     """Realistic painted face in Head-local metres (see FX/FY): shading follows the sculpted relief."""
     c = mul(skin, 0.9 + 0.12 * a + 0.03 * r)
     ax = abs(X)
-    c = mul(c, 1 - 0.25 * clamp((ax - 0.055) / 0.03))  # side planes
+    for sx in (1, -1):  # modelling: hollow under the cheekbone, temples (no edge shading: face matches the neck)
+        c = mul(c, 1 - 0.1 * g((X - sx * 0.047) / 0.014) * g((Y - 0.098) / 0.012))
     warm = (skin[0] * 1.08, skin[1] * 0.8, skin[2] * 0.78)
     c = mix(c, warm, 0.35 * g((ax - 0.045) / 0.018) * g((Y - 0.12) / 0.018) + 0.3 * g(X / 0.01) * g((Y - 0.12) / 0.008))
     c = mul(c, 1 + 0.1 * g(X / 0.005) * (0.122 < Y < 0.172))  # nose bridge highlight
@@ -213,7 +214,7 @@ def face(X, Y, a, r, skin, iris, brow, lips, hairline=0.21, hair=None, stubble=0
     c = mul(c, 1 - 0.25 * g(X / 0.013) * g((Y - 0.105) / 0.003))  # under the nose
     c = mul(c, 1 - 0.07 * (ax < 0.005 and 0.092 < Y < 0.104))  # philtrum
     c = mul(c, 1 - 0.2 * g(X / 0.014) * g((Y - 0.071) / 0.004))  # under the lip
-    c = mul(c, 1 - 0.25 * clamp((0.05 - Y) / 0.015))  # jaw underside
+    c = mul(c, 1 - 0.08 * clamp((0.05 - Y) / 0.015))  # jaw underside
     for sx in (1, -1):  # nasolabial folds
         d = B.seg_dist(X, Y, sx * 0.016, 0.112, sx * 0.03, 0.079)
         c = mul(c, 1 - (0.12 + 0.2 * age) * g(d / 0.0015))
@@ -276,9 +277,9 @@ def face(X, Y, a, r, skin, iris, brow, lips, hairline=0.21, hair=None, stubble=0
 
 
 def face_tex(name, **kw):
-    @tex(name, 128)
+    @tex(name, 256)
     def _(x, y, a, b, r):
-        X, Y = px_to_face(x, y)
+        X, Y = px_to_face(x, y, 256)
         return face(X, Y, a, r, **kw)
 
 
@@ -359,7 +360,7 @@ def _(x, y, a, b, r):
 
 @tex("cc_skin")
 def _(x, y, a, b, r):
-    return mul((1, 1, 1), 0.88 + 0.12 * a + 0.03 * r)
+    return mul((1, 1, 1), 0.9 + 0.12 * a + 0.03 * r)  # = face()'s base variation: body and face skin match
 
 
 @tex("cc_hair")
@@ -444,6 +445,11 @@ def _(x, y, a, b, r):
     return mul((0.26, 0.1, 0.07), 0.6 + 0.5 * a)
 
 
+def lin(c):
+    """glTF colour factors are linear; the face textures bake skin in sRGB."""
+    return tuple(v ** 2.2 for v in c)
+
+
 def MAT(name, tex_, color=(1, 1, 1), scale=0.5, **kw):
     B.MATS[name] = B.M(tex_, color, scale, **kw)
 
@@ -455,9 +461,9 @@ MAT("cc_mask_porcelain", "cc_mask_porcelain", rough=0.5)
 MAT("cc_eyeband", "cc_eyeband", fit=True)
 MAT("cc_stole", "cc_stole", fit=True)
 MAT("cc_ledger", "cc_ledger", fit=True)
-MAT("cc_skin_marcus", "cc_skin", (0.6, 0.44, 0.35), 0.2)
-MAT("cc_skin_old", "cc_skin", (0.56, 0.47, 0.42), 0.2)
-MAT("cc_skin_pale", "cc_skin", (0.56, 0.45, 0.39), 0.2)
+MAT("cc_skin_marcus", "cc_skin", lin((0.6, 0.44, 0.35)), 0.2)
+MAT("cc_skin_old", "cc_skin", lin((0.56, 0.47, 0.42)), 0.2)
+MAT("cc_skin_pale", "cc_skin", lin((0.56, 0.45, 0.39)), 0.2)
 MAT("cc_hair_dark", "cc_hair", (0.09, 0.07, 0.05), 0.08)
 MAT("cc_hair_brown", "cc_hair", (0.24, 0.16, 0.1), 0.1)
 MAT("cc_hair_white", "cc_hair", (0.5, 0.48, 0.45), 0.2)
@@ -478,6 +484,11 @@ MAT("cc_cardigan", "cc_knit", (0.35, 0.3, 0.24), 0.3)
 MAT("cc_dress", "cc_dress", scale=0.45)
 MAT("cc_stocking", "cc_skin", (0.08, 0.07, 0.07))
 MAT("cc_apron", "cc_wool", (0.34, 0.32, 0.28), 0.4)
+B.fabric("plain", "cc_shirt_black", "cc_trousers", "cc_apron", "cc_robe", "cc_plaid", "cc_dress")
+B.fabric("felt", "cc_coat_black", "cc_burlap")
+B.fabric("twill", "cc_denim", bump=0.9, wrinkle=0.006)
+B.fabric("knit", "cc_cardigan")
+B.fabric("leather", "cc_boot", "cc_leather", bump=0.8, wrinkle=0)
 MAT("cc_wood", "planks" if "planks" in B.TEXTURES else "cc_leather", (0.8, 0.7, 0.6), 0.5)
 
 
@@ -577,14 +588,17 @@ def leg(m, side, s, mat, shoe_mat, sole="cc_sole", r=0.084, shin_mat=None, boot=
 
 
 def half_skirts(m, mat, inner, rows, folds=4, amp=0.03, seg=10, cx=0.1):
-    """Long coat/robe/skirt split in two halves, one per thigh, meeting at the centre line: legs still walk.
+    """Long coat/robe/skirt split in two halves on the Skirt joints (they swing at ~0.6x the thigh): legs still
+    walk. Halves wrap 15 deg past the centre line so no slit opens as they part; the right one sits a hair outside.
     rows: Thigh-local [(y, rx, rz)] centred on the body mid-line; folds deepen toward the hem."""
     n = len(rows) - 1
+    rig.skirt_joints(m)
     for side, s in (("L", 1), ("R", -1)):
-        m.use("Thigh" + side)
-        a0, a1 = (0, 180) if s > 0 else (180, 360)
+        m.use("Skirt" + side)
+        a0, a1 = (-15, 195) if s > 0 else (165, 375)
+        rows_s = rows if s > 0 else [(y, rx * 1.012, rz * 1.012) for y, rx, rz in rows]
         fold = lambda deg, i: 1 + amp * (i / n) ** 1.2 * math.sin(math.radians(deg) * folds * 2 + s)
-        shell(m, mat, [(y, rx, rz, -s * cx, 0.0) for y, rx, rz in rows], a0, a1, seg, inner=inner, fold=fold)
+        shell(m, mat, [(y, rx, rz, -s * cx, 0.0) for y, rx, rz in rows_s], a0, a1, seg + 1, inner=inner, fold=fold)
 
 
 def eye_band(m, joint, y, r):
@@ -805,9 +819,14 @@ def char_marked_woman():
             m.ellipsoid("white", (0.008, 0.008, 0.004), (0.03, y, 0.108 if y < 0.2 else 0.128), seg=6, rings=4)
         m.lathe("cc_cardigan", [(0.1, 0.44), (0.19, 0.4), (0.2, 0.44), (0.15, 0.52), (0.08, 0.56), (0.065, 0.58)],
                 (0, 0, -0.01), scale=(1, 1, 0.72), seg=16)  # knitted shawl
+        rig.skirt_joints(m)
+        for k, s in (("L", 1), ("R", -1)):  # apron in halves over the dress's, overlapping 5 deg at the middle
+            m.use("Skirt" + k)
+            g = 1.0 if s > 0 else 1.01
+            shell(m, "cc_apron", [(y + 0.05, rx * g, rz * g, -s * 0.1, 0.0) for y, rx, rz in
+                                  ((-0.45, 0.255, 0.222), (-0.25, 0.24, 0.199), (-0.05, 0.204, 0.156), (0.08, 0.15, 0.111))],
+                  *((-5, 34) if s > 0 else (-34, 5)), 4)
         m.use("Hips")
-        shell(m, "cc_apron", [(-0.45, 0.25, 0.218, 0, 0.0), (-0.25, 0.236, 0.195, 0, 0.0), (-0.05, 0.2, 0.152, 0, 0.0),
-                              (0.08, 0.146, 0.108, 0, 0.0)], -34, 34, 6)
         m.lathe("cc_apron", [(0.142, 0.06), (0.146, 0.07), (0.142, 0.08)], scale=(1, 1, 0.72), seg=16)  # apron band
         half_skirts(m, "cc_dress", "cc_robe_in",
                     [(0.08, 0.19, 0.13), (-0.1, 0.21, 0.155), (-0.3, 0.235, 0.18), (-0.5, 0.25, 0.2)], folds=4, amp=0.05)

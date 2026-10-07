@@ -13,6 +13,7 @@ var anim: HumanoidAnim
 var grounded := true  ## feet stay on whatever floor is under them (skipped while lying down / carried)
 var _look_at: Node3D
 var _look_point := Vector3.INF
+var _stride := 0.0
 
 
 static func make(parent: Node, scene: String, pos: Vector3, yaw := 0.0) -> Actor:
@@ -28,8 +29,13 @@ static func make(parent: Node, scene: String, pos: Vector3, yaw := 0.0) -> Actor
 	return a
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	_ground()
+	if anim.speed > 0.3 and grounded:  # footfalls: one per stride (the cinematics have no other feet)
+		_stride += anim.speed * delta
+		if _stride > 1.5 - 0.1 * anim.speed:
+			_stride = 0.0
+			Snd.step(self, -7.0 if anim.speed < 3.0 else -2.0)
 	var p := _look_point
 	if _look_at and is_instance_valid(_look_at):
 		p = _look_at.global_position + Vector3.UP * 1.55

@@ -61,7 +61,8 @@ func grady_talk(grady: Actor) -> void:
 	grady.model.rotation.y = 0.0
 	grady.look(alex)
 	alex.look(grady)
-	d.shot(Vector3(18.0, 1.7, -15.0), Vector3(14, 1.3, -16.7), Vector3(17.2, 1.6, -14.4), 4.0)
+	d.key_light(Vector3(14.0, 2.4, -15.0), Color(1.0, 0.75, 0.45), 1.5, 6.5)  # the shop window's warm pool
+	d.shot(Vector3(18.0, 1.7, -15.0), Vector3(14, 1.3, -16.7), Vector3(17.2, 1.6, -14.4), 4.0, 48.0)
 	grady.gesture("look_around", 2.2)
 	await hud.subtitle("Grady", "You. From the motel. You made it through the night.", 2.6)
 	alex.gesture("give", 4.4)  # holds the burned palm out until Grady tells him to put it away
@@ -127,6 +128,7 @@ func moth_sawmill_call(grady: Actor) -> void:
 	alex.look(null)
 	alex.face(Vector3(8, 0, -12))
 	alex.gesture("hand_to_face")
+	Snd.sfx("radio_tune", null, -5.0)
 	await hud.subtitle("Radio", "Kshhh... channel seven...", 1.8)
 	await hud.subtitle("Moth", "You found Grady. Good.", 2.0)
 	await hud.subtitle("Alex", "Moth? Who is Owen?", 1.8)
@@ -203,8 +205,13 @@ func boss_intro(owen: Enemy) -> void:
 	d.cinematic(true)
 	var alex := d.stand_in(Vector3(-115, 0, -3), -PI / 2.0)
 	alex.look(owen)
+	# the arena gets its light: a warm spot over the yard and two lanterns at its edges (they stay on for the fight)
+	d.key_light(Vector3(-112.0, 7.0, -2.0), Color(1.0, 0.7, 0.4), 6.0, 25.0, Vector3(-112.0, 0.0, -2.0), 55.0)
+	d.key_light(Vector3(-122.0, 2.4, -8.0), Color(1.0, 0.75, 0.45), 1.5, 8.0)
+	d.key_light(Vector3(-104.0, 2.4, 4.0), Color(1.0, 0.75, 0.45), 1.5, 8.0)
+	Snd.stinger("reveal", -9.0)
 	# the sawmill doors: Owen steps out of the dark
-	d.shot(Vector3(-119.5, 1.1, -1.0), Vector3(-127, 1.4, -5), Vector3(-119.0, 1.3, -1.8), 4.0)
+	d.shot(Vector3(-119.5, 0.7, -1.0), Vector3(-127, 1.4, -5), Vector3(-119.0, 1.3, -1.8), 5.0, 50.0, 0.015)
 	var out := _walk_enemy(owen, Vector3(-118.6, 0, -3.8), 2.0)
 	await d.wait(1.4)
 	await hud.subtitle("Owen", "That's not yours.", 1.8)
@@ -226,7 +233,7 @@ func boss_intro(owen: Enemy) -> void:
 	var tw := owen.create_tween()
 	tw.tween_property(a, "aim", 1.0, 0.5)
 	await hud.subtitle("Owen", "It'll keep you too.", 1.8)
-	d.ots(owen, alex, -1.0)
+	d.ots(owen, alex, -1.0, 0.4)
 	await d.wait(0.8)
 	d.release_stand_in()
 	d.cinematic(false)
@@ -365,6 +372,7 @@ func blackout() -> void:
 	d.shot(yard + Vector3(-3.0, 1.7, 1.8), Vector3(-60, 3.0, 0.0), yard + Vector3(-2.5, 2.0, 1.2), 5.0)
 	await hud.subtitle("", "03:00", 1.6)
 	d.lights_out(Vector3(0, 0, 0), 30.0)
+	Snd.sfx("door_slam", null, -4.0, 0.6)
 	alex.look(Vector3(-60, 3, 0))
 	await hud.subtitle("Alex", "The lights...", 1.6)
 	d.shot(yard + Vector3(1.8, 1.55, 1.2), yard + Vector3(0, 1.55, 0))
@@ -379,6 +387,8 @@ func blackout() -> void:
 	eyes.omni_range = 4.0
 	harvester.model.add_child(eyes)
 	eyes.position = Vector3(0, 2.6, 0.5)
+	Snd.attach(harvester, "harvester", -4.0)  # the red-eyed hum
+	Snd.stinger("reveal", -8.0)
 	var walk := harvester.walk_to(Vector3(-86, 0, 0), 1.6)
 	d.shot(Vector3(-91, 0.6, 3.0), Vector3(-86, 2.0, -8), Vector3(-91, 0.9, 2.0), 6.0)
 	await d.wait(2.6)
@@ -409,7 +419,7 @@ func blackout() -> void:
 	await hud.subtitle("Alex", "Moth, what was that thing?", 2.0)
 	await hud.subtitle("Radio", "Kshhh...", 1.4)
 	hud.banner("I · THE MARK", Color(0.85, 0.8, 0.7), 4.0)
-	await d.wait(4.5)
+	await d.wait(2.5)
 	var f: Dictionary = d.flags
 	var owen_text: String = {"spared": "Owen: spared", "killed": "Owen: killed"}.get(f.owen, "Owen: fled")
 	await hud.say([["", "End of Chapter 1.  %s · Evidence %d · Tokens %d · Key part %s" % [owen_text,

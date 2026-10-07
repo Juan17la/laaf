@@ -168,6 +168,21 @@ def open_front(gap):
     return FRONT - gap / 2, FRONT - TAU + gap / 2
 
 
+def skirt(m, mat, secs, a0, a1, n, power=2.4, lining=None):
+    """A coat skirt / long skirt (secs Hips-local) split in halves on the Skirt joints, which swing with the
+    thighs: no leg stabs through it. Each half wraps 0.26 rad past the back (and a closed front) so no slit opens
+    as they part; the right one sits a hair outside."""
+    rig.skirt_joints(m)
+    back, ov = FRONT - math.pi, 0.26
+    front = ov if a0 - a1 > TAU - 0.01 else 0.0
+    for k, s in (("L", 1), ("R", -1)):
+        m.use("Skirt" + k)
+        lo, hi = (a0 + front, back - ov) if s > 0 else (back + ov, a1 - front)
+        g = 1.0 if s > 0 else 1.012
+        shell(m, mat, [(c[0], c[1] * g, c[2] * g) + tuple(c[3:]) for c in secs], lo, hi, n // 2 + 2, power,
+              pos=(-s * 0.1, 0.05, 0), lining=lining)
+
+
 def grow(secs, d, dz=None):
     dz = d if dz is None else dz
     return [(s[0], s[1] + d, s[2] + dz) + tuple(s[3:]) for s in secs]
@@ -315,22 +330,23 @@ def tube(m, mat, pts, r, seg=5):
 
 def face_fn(skin, hair, iris, lips, hairline=0.212, stubble=0.0, beard=None, glasses=False,
             bags=0.35, wrinkles=0.0, grief=1.0, red_nose=0.0, lashes=False, brow_w=1.0, blush=0.0):
-    """128px face painted in head metres: x=(u-.5)*FACE_W, y=FACE_TOP-v*FACE_H (see HEAD_ROWS)."""
+    """256px face painted in head metres: x=(u-.5)*FACE_W, y=FACE_TOP-v*FACE_H (see HEAD_ROWS). The base is the
+    body skin (t_skin x skin) with no edge shading, so face, scalp and neck match."""
     lip_dark = mul(lips, 0.45)
 
     def fn(px, py, a, b, r):
-        x, y = (px + 0.5) / 128 * FACE_W - FACE_W / 2, FACE_TOP - (py + 0.5) / 128 * FACE_H
+        x, y = (px + 0.5) / 256 * FACE_W - FACE_W / 2, FACE_TOP - (py + 0.5) / 256 * FACE_H
+        px, py = px / 2, py / 2  # strand/stipple patterns keep their 128px scale
         ax = abs(x)
         c = mul(skin, 0.9 + 0.1 * a + 0.025 * (r - 0.5))
         # broad form shading: sockets, under-brow, sides of the nose, under the chin
         sh = 1.0
-        sh -= 0.13 * _g((ax - 0.031) / 0.019, (y - 0.156) / 0.013)
-        sh -= 0.08 * _g((ax - 0.045) / 0.02, (y - 0.108) / 0.012) * 0.6
-        sh -= 0.09 * _g((ax - 0.011) / 0.004, (y - 0.13) / 0.022)
+        sh -= 0.16 * _g((ax - 0.031) / 0.019, (y - 0.156) / 0.013)
+        sh -= 0.1 * _g((ax - 0.047) / 0.018, (y - 0.1) / 0.012)  # hollow under the cheekbone
+        sh -= 0.12 * _g((ax - 0.011) / 0.004, (y - 0.13) / 0.022)
         sh += 0.06 * _g(x / 0.006, (y - 0.13) / 0.02)  # bridge highlight
         sh += 0.05 * _g(x / 0.03, (y - 0.19) / 0.015)   # forehead
-        sh -= 0.12 * _smooth(0.058, 0.03, y) * _smooth(0.0, 0.012, ax)
-        sh -= 0.06 * _smooth(0.055, 0.078, ax)
+        sh -= 0.05 * _smooth(0.058, 0.03, y) * _smooth(0.0, 0.012, ax)
         c = mul(c, sh)
         if blush or True:
             k = (0.18 + blush) * _g((ax - 0.045) / 0.017, (y - 0.115) / 0.014)
@@ -516,7 +532,7 @@ def t_beard(x, y, a, b, r):
 
 
 def t_skin(x, y, a, b, r):
-    v = 0.84 + 0.08 * a + 0.02 * (r - 0.5)
+    v = 0.9 + 0.1 * a + 0.025 * (r - 0.5)  # = face_fn's base variation: body and face skin match
     return (v, v, v)
 
 
@@ -535,7 +551,7 @@ B.TEXTURES.update({
                              red_nose=0.55, brow_w=1.3),
 })
 for _f in ("owen", "nora", "julian", "silas"):
-    B.TEX_SIZE["cb_face_" + _f] = 128
+    B.TEX_SIZE["cb_face_" + _f] = 256
 
 def lin(c):
     """glTF colour factors are linear; convert an sRGB colour so tints match the baked face textures."""
@@ -569,6 +585,12 @@ for _f, _skin, _hair in (("owen", (0.72, 0.55, 0.44), (0.35, 0.22, 0.12)),
     B.MATS["cb_face_" + _f] = B.M("cb_face_" + _f, fit=True)
     B.MATS["cb_skin_" + _f] = B.M("cb_skin", lin(_skin), 0.3)
     B.MATS["cb_hair_" + _f] = B.M("cb_strands", lin(mul(_hair, 1.25)), 0.12)
+B.fabric("plain", "cb_flannel", "cb_scrubs", "cb_labcoat", "cb_blouse", "cb_trousers", "cb_undershirt", "cb_skirt")
+B.fabric("knit", "cb_knit", "cb_beanie", "cb_scarf")
+B.fabric("nylon", "cb_vest", "cb_raincoat", bump=0.6, wrinkle=0.006)
+B.fabric("twill", "cb_denim", bump=0.9, wrinkle=0.006)
+B.fabric("felt", "cb_coat", "cb_cap")
+B.fabric("leather", "cb_boot", bump=0.8, wrinkle=0)
 
 
 # ============================================================== characters
@@ -654,17 +676,17 @@ def m_nora():
                              (0.045, 0.53, 0.04)], 0.0022, seg=3)
         m.cyl("cb_steel", 0.014, 0.014, 0.007, (0, 0.388, 0.122), (90, 0, 0), seg=8)  # Lily's locket
         # long A-line skirt from the waist to mid-shin, with pleat ridges
-        m.use("Hips")
-        m.lathe("cb_skirt", [(0.27, -0.7), (0.27, -0.68), (0.24, -0.45), (0.2, -0.2), (0.175, -0.05), (0.16, 0.06),
-                             (0.14, 0.1)], scale=(1.0, 1, 0.78), seg=16)
-        m.lathe("cb_lining", [(0.14, 0.09), (0.16, 0.05), (0.2, -0.2), (0.24, -0.45), (0.27, -0.69)], scale=(1.0, 1, 0.78),
-                seg=18)
+        skirt(m, "cb_skirt", [(y, r, r * 0.78) for r, y in ((0.27, -0.7), (0.27, -0.68), (0.24, -0.45), (0.2, -0.2),
+                                                            (0.175, -0.05), (0.16, 0.06), (0.14, 0.1))],
+              FRONT, FRONT - TAU, 16, power=2.0, lining="cb_skirt")  # parting halves show skirt, not lining
         for i in range(5):
             ang = FRONT + (i - 2) * 0.45
             px, pz = math.cos(ang), math.sin(ang)
+            k = 1 if px > -0.01 else -1  # pleats ride their half of the skirt
+            m.use("SkirtL" if k > 0 else "SkirtR")
             m.loft("cb_skirt", [(-0.7, 0, 0, 0.275 * px, 0.275 * 0.78 * pz), (-0.69, 0.012, 0.012, 0.275 * px, 0.275 * 0.78 * pz),
                                 (-0.25, 0.006, 0.006, 0.205 * px, 0.205 * 0.78 * pz), (-0.12, 0, 0, 0.19 * px, 0.19 * 0.78 * pz)],
-                   seg=4)
+                   (-k * 0.1, 0.05, 0), seg=4)
 
         def hair(m):
             m.use("Head")
@@ -725,12 +747,12 @@ def m_julian():
     tube(m, "rubber", [(-0.06, 0.18, 0.14), (-0.08, 0.35, 0.1), (-0.06, 0.52, 0.03)], 0.005, seg=4)
     tube(m, "rubber", [(0.06, 0.18, 0.14), (0.08, 0.35, 0.1), (0.06, 0.52, 0.03)], 0.005, seg=4)
     # coat skirt from the hips, open at the front
-    m.use("Hips")
-    tails = [(-0.56, 0.2, 0.15), (-0.3, 0.19, 0.135), (-0.1, 0.182, 0.125), (0.03, 0.172, 0.118)]
-    shell(m, "cb_labcoat", tails, *open_front(0.45), 16, power=2.4, lining="cb_lining")
+    tails = [(-0.56, 0.2, 0.15), (-0.3, 0.19, 0.135), (-0.1, 0.182, 0.125), (0.03, 0.172, 0.118), (0.1, 0.158, 0.108)]
+    skirt(m, "cb_labcoat", tails, *open_front(0.45), 16, lining="cb_lining")
     for s in (-1, 1):
-        pocket(m, "cb_labcoat", 0.1, 0.1, (s * 0.15, -0.3, 0.13), (0, s * 25, 0), flap="cb_labcoat")
-    m.cyl("cb_lens", 0.007, 0.007, 0.09, (0.14, -0.2, 0.115), seg=4)  # syringe in the pocket
+        m.use("Skirt" + ("L" if s > 0 else "R"))
+        pocket(m, "cb_labcoat", 0.1, 0.1, (s * 0.05, -0.25, 0.13), (0, s * 25, 0), flap="cb_labcoat")
+    m.cyl("cb_lens", 0.007, 0.007, 0.09, (0.04, -0.15, 0.115), seg=4)  # syringe in the (left) pocket
 
     def hair(m):
         m.use("Head")
@@ -782,11 +804,12 @@ def m_silas():
                             (0.47, 0, 0, 0.055, 0.12)], seg=8, power=4)
         for i in range(3):
             m.box("cb_scarf", (0.01, 0.035, 0.006), (0.032 + i * 0.018, 0.13, 0.158))
-        m.use("Hips")
-        tails = [(-0.6, 0.23, 0.18), (-0.35, 0.215, 0.165), (-0.12, 0.2, 0.15), (0.05, 0.19, 0.145)]
-        shell(m, "cb_coat", tails, *open_front(0.55), 16, power=2.4, lining="cb_lining")
+        tails = [(-0.6, 0.23, 0.18), (-0.35, 0.215, 0.165), (-0.12, 0.2, 0.15), (0.05, 0.19, 0.145),
+                 (0.12, 0.17, 0.125, 0, 0.015)]  # top tucks under the coat
+        skirt(m, "cb_coat", tails, *open_front(0.55), 16, lining="cb_lining")
         for s in (-1, 1):
-            pocket(m, "cb_coat", 0.12, 0.11, (s * 0.17, -0.34, 0.15), (0, s * 28, 0), flap="cb_coat")
+            m.use("Skirt" + ("L" if s > 0 else "R"))
+            pocket(m, "cb_coat", 0.12, 0.11, (s * 0.07, -0.29, 0.15), (0, s * 28, 0), flap="cb_coat")
 
         def cap(m):
             m.use("Head")

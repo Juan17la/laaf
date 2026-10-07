@@ -226,6 +226,7 @@ func _physics_process(_delta: float) -> void:
 func interact(by: Node) -> void:
 	if not enabled:
 		return
+	Snd.sfx("pickup" if once else "click", global_position, -5.0)
 	if once:
 		enabled = false
 		if _item and ItemFx.ITEMS.get(_kind, [[], Vector3.ONE])[1] != Vector3.ZERO:  # a thing: hand it over (header)

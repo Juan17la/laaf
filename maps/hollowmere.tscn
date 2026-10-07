@@ -257,21 +257,21 @@
 background_mode = 1
 background_color = Color(0.055, 0.065, 0.06, 1)
 ambient_light_source = 2
-ambient_light_color = Color(0.42, 0.5, 0.46, 1)
-ambient_light_energy = 0.6
+ambient_light_color = Color(0.4, 0.5, 0.58, 1)
+ambient_light_energy = 0.8
 tonemap_mode = 2
 fog_enabled = true
-fog_light_color = Color(0.15, 0.18, 0.16, 1)
-fog_density = 0.03
+fog_light_color = Color(0.12, 0.16, 0.19, 1)
+fog_density = 0.024
 fog_sky_affect = 1.0
 volumetric_fog_enabled = true
-volumetric_fog_density = 0.028
+volumetric_fog_density = 0.022
 volumetric_fog_albedo = Color(0.72, 0.8, 0.74, 1)
-volumetric_fog_length = 48.0
+volumetric_fog_length = 60.0
 glow_enabled = true
 glow_intensity = 0.6
 adjustment_enabled = true
-adjustment_contrast = 1.12
+adjustment_contrast = 1.18
 adjustment_saturation = 0.55
 
 [sub_resource type="BoxShape3D" id="s2"]
@@ -458,8 +458,8 @@ environment = SubResource("s1")
 
 [node name="Moon" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.8, 0.35, -0.48, 0, 0.81, 0.59, 0.6, -0.47, 0.64, 0, 30, 0)
-light_color = Color(0.55, 0.66, 0.72, 1)
-light_energy = 0.18
+light_color = Color(0.55, 0.66, 0.8, 1)
+light_energy = 0.3
 
 [node name="Terrain" type="Node3D" parent="."]
 

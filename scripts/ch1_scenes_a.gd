@@ -156,7 +156,8 @@ func _bridge(alex: Actor) -> void:
 	beam.position = Vector3(2.1, 0.8, 0)
 	beam.rotation = Vector3(0, -PI / 2.0, 0)
 	alex.visible = false
-	d.shot(Vector3(-95.2, 0.8, 136.0), Vector3(-99, 0.9, 148))
+	d.shot(Vector3(-95.2, 0.8, 136.0), Vector3(-99, 0.9, 148), Vector3(-95.5, 1.1, 141.0), 7.0, 72.0)  # wide, creeping in
+	var engine := Snd.attach(car, "generator", -2.0)
 	hud.fade(0.0, 1.0)
 	var tw := car.create_tween()
 	tw.tween_property(car, "global_position:z", 146.0, 3.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
@@ -167,6 +168,8 @@ func _bridge(alex: Actor) -> void:
 		await d.wait(0.1 + 0.05 * i)
 	beam.visible = false
 	car.rotation.x = 0.0
+	Snd.stop(engine)
+	Snd.sfx("scrape", car.global_position, -3.0, 0.6)
 	# Alex gets out, walks round to the nose, leans on the hood
 	alex.visible = true
 	d.shot(Vector3(-102.8, 1.4, 141.6), Vector3(-99.8, 1.0, 145.4))
@@ -203,7 +206,7 @@ func _bridge(alex: Actor) -> void:
 	d.shot(alex.global_position + Vector3(1.6, 1.5, -3.2), alex.global_position + Vector3(0, 1.3, 0))
 	d.track(alex, Vector3(1.6, 1.5, -3.2), Vector3(0, 1.3, 0))
 	await d.wait(2.2)
-	d.shot(Vector3(-98.6, 0.6, 130.0), Vector3(-103.2, 2.2, 140.2))
+	d.shot(Vector3(-98.6, 0.6, 130.0), Vector3(-103.2, 2.2, 140.2), Vector3(-98.6, 0.9, 129.4), 3.4, 62.0)
 	await d.wait(3.2)
 	await hud.fade(1.0, 0.5)
 	car.queue_free()
@@ -299,9 +302,10 @@ func _window(alex: Actor) -> void:
 	d.shot(Vector3(-90.5, 1.3, 53.8), Vector3(-95.5, 1.4, 51.0))
 	await d.wait(3.2)
 	owen.face(Vector3(-100, 0, 50.6))
-	d.shot(Vector3(-101.9, 1.05, 47.7), Vector3(-102.35, 0.7, 48.5))  # asleep
+	d.shot(Vector3(-101.9, 1.05, 47.7), Vector3(-102.35, 0.7, 48.5), Vector3(-101.9, 1.0, 47.9), 3.0, 46.0, 0.006)  # asleep, breathing
 	await d.wait(1.6)
 	owen.gesture("window_press")
+	Snd.sfx("thud", Vector3(-96.5, 1.4, 50.0), -4.0, 1.4)
 	d.shot(Vector3(-93.3, 1.75, 51.9), Vector3(-101.5, 0.7, 48.6))  # over his shoulder, through the glass
 	await d.wait(2.4)
 	# to the door; he reaches for it
@@ -309,11 +313,12 @@ func _window(alex: Actor) -> void:
 	await owen.walk_to(Vector3(-95.7, 0, 49.1), 1.3)
 	await owen.face(Vector3(-97, 0, 49.1), 0.3)
 	owen.gesture("reach")
-	d.shot(Vector3(-93.4, 1.2, 47.4), Vector3(-96.0, 1.3, 49.1))
+	Snd.sfx("door_locked", Vector3(-96.5, 1.0, 49.0), -3.0)
+	d.shot(Vector3(-93.4, 1.2, 47.4), Vector3(-96.0, 1.3, 49.1), Vector3(-94.6, 1.25, 48.2), 4.0, 50.0, 0.02)
 	await d.wait(1.4)
 	# the burn: an orange flicker on the sleeping hand
 	var hand := _hand(alex)
-	var burn := _light(hand.global_position + Vector3(0, 0.25, 0), Color(1.0, 0.45, 0.1), 2.5, 2.5, true)
+	var burn := _light(hand.global_position + Vector3(0, 0.25, 0), Color(1.0, 0.45, 0.1), 1.2, 1.6, true)
 	d.shot(hand.global_position + Vector3(0.45, 0.55, -0.35), hand.global_position)
 	await hud.subtitle("", "Tsssss…", 1.3)
 	# Alex jolts up, clutching the hand
@@ -321,6 +326,7 @@ func _window(alex: Actor) -> void:
 	tw.tween_property(alex.model, "rotation:x", 0.0, 0.3).set_trans(Tween.TRANS_BACK)
 	tw.tween_property(alex, "global_position", Vector3(-100.6, 0.1, 49.0), 0.3)  # (sits up off the bed)
 	alex.gesture("clutch_hand")
+	Snd.sfx("hurt", alex.global_position + Vector3.UP, -2.0)
 	burn.global_position = Vector3(-100.4, 1.2, 49.3)
 	d.shot(Vector3(-99.0, 1.5, 47.6), Vector3(-100.6, 1.2, 49.0))
 	await hud.subtitle("Alex", "Agh—!", 1.3)
@@ -380,7 +386,8 @@ func room_door() -> void:
 	_note.rotation.y = 0.4
 	eye.global_position = Vector3(-96.36, 1.45, 49.0)
 	eye.rotation.y = PI / 2.0
-	d.shot(Vector3(-94.6, 1.5, 48.6), Vector3(-96.4, 1.4, 49.0))  # outside: the eye on the door
+	Snd.stinger("dread", -9.0)
+	d.shot(Vector3(-94.6, 1.5, 48.6), Vector3(-96.4, 1.4, 49.0), Vector3(-95.0, 1.5, 48.8), 4.0, 48.0)  # outside: the eye on the door
 	await hud.subtitle("Alex", "The same eye. On my door.")
 	d.shot(Vector3(-95.4, 1.6, 49.4), Vector3(-96.4, 1.45, 49.0))
 	await hud.subtitle("Alex", "Still wet.", 1.6)
@@ -425,13 +432,14 @@ func room_radio_call() -> void:
 	if is_instance_valid(_mic):  # picks the hand mic up off the table and talks into it
 		await alex.take(_mic, "talk")
 	alex.face(radio)
-	var close := func() -> void: d.shot(radio + Vector3(0.45, 0.3, -0.5), radio)  # the speaker crackles
+	var close := func() -> void: d.shot(radio + Vector3(0.45, 0.3, -0.5), radio, radio + Vector3(0.25, 0.15, -0.3), 5.0, 45.0)  # the speaker crackles, slowly closer
 	var face := func() -> void:
 		_near(alex, alex.model.global_basis.z * 1.0 + alex.model.global_basis.x * 0.3 + Vector3.UP * 1.6,
 			Vector3(0, 1.5, 0))
 	var over := func() -> void:  # behind Alex's shoulder, onto the radio
 		d.shot(alex.global_position - alex.model.global_basis.z * 0.8 + alex.model.global_basis.x * -0.4
 			+ Vector3.UP * 1.7, radio)
+	var hum := Snd.sfx("radio_static", radio, -12.0)  # the set hums under the whole call
 	close.call()
 	await hud.subtitle("Moth", "You're awake. Good.", 1.8)
 	face.call()
@@ -452,6 +460,7 @@ func room_radio_call() -> void:
 	close.call()
 	await hud.subtitle("Moth", "Don't let him. Go. Now.", 1.8)
 	alex.look(null)
+	Snd.stop(hum)
 	alex.let_go()  # (the mic goes back on the table)
 	_room_props()
 	_end_stand_in()
@@ -469,7 +478,8 @@ func hunt_start(owen: Enemy) -> void:
 	var spot := owen.global_position
 	var a := d.actor("res://models/char_owen.glb", spot + Vector3(2.0, 0, 3.5), PI)
 	var rim := _light(spot + Vector3(-1.0, 2.6, -1.5), Color(0.55, 0.65, 0.9), 1.4, 6.0)
-	d.shot(spot + Vector3(3.0, 0.5, -4.5), spot + Vector3(0.8, 1.3, 1.2))
+	Snd.stinger("reveal", -10.0)
+	d.shot(spot + Vector3(3.0, 0.5, -4.5), spot + Vector3(0.8, 1.3, 1.2), spot + Vector3(2.6, 0.7, -3.4), 4.0, 55.0, 0.02)
 	await a.walk_to(spot, 1.6)
 	a.face(spot + Vector3(-8, 0, -20))  # toward the motel
 	a.gesture("look_around")

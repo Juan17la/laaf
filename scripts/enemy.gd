@@ -7,6 +7,16 @@ extends CharacterBody3D
 ## asthma (Julian, see GasCloud), checks_hiding (searches hiding spots it saw used), stealth takedown.
 ## Chapter 3: hearing + armor (Marcus), SmokeCloud blocks sight, crush() (a dropped bell), subclass spawn
 ## (Harvester passes its own instance to spawn()).
+## Adaptive: every enemy reads and feeds one shared profile of the player's habits (habits(): dodge,
+## ranged, stealth, hide, melee, stun; moving averages that keep re-learning). Rollers get delayed strikes and
+## follow-ups, snipers a weaving approach and dives out of the aim, brawlers backsteps out of their swings and a
+## pounce back, stunners shorter stuns and angrier enemies, sneaks guards that glance back, hiders searchers that
+## check the nearest hiding spots. A habit that takes hold is told to the player (a HUD note: "THEY ADAPT").
+## Combat: the player's stuns (melee, flare, fire) go through stagger(): back-to-back stuns get shorter and a
+## guard window after each shrugs the next off, so nothing can be stun-locked. Rage (hurt, stunned; a boss's
+## floor rises as it loses health) makes them faster, quicker to strike and frenzied. Agile ones dodge, pounce
+## from a few metres into a quick strike, chain combos; packs flank. Bosses go down in varied poses (DOWN:
+## HumanoidAnim.down_pose), breathing hard and watching Alex; deaths fall away from the killing blow, in varied ways.
 
 signal died(enemy: Enemy)
 signal downed(enemy: Enemy)  ## boss at 0 HP: kneels, waits for spare / kill
@@ -46,6 +56,7 @@ enum State { PATROL, SUSPICIOUS, CHASE, SEARCH, STUNNED, DOWN, DEAD }
 @export var checks_hiding := false  ## remembers hiding spots it saw used; SEARCH visits them first
 @export var hearing := 1.0  ## noise radius multiplier (Marcus hears everything)
 @export var armor := 1.0  ## damage multiplier while not stunned (Marcus: very tough)
+@export var agile := true  ## dodges and pounces (the Harvester is too big for either)
 
 var state := State.PATROL
 var health := 60.0
@@ -81,9 +92,39 @@ var _back := 0.0
 var _asthma_cd := 0.0
 var _spots: Array[Vector3] = []  ## hiding spots seen used (checks_hiding)
 var _check: Array[Vector3] = []  ## spots still to check this search
+var _windup_now := 0.55  ## this swing's windup (jittered; delayed against players who roll)
+var _wait := 0.0  ## patrol: standing still (a pause at a waypoint or a glance back)
+var _look := Vector3.ZERO  ## direction of the current glance back (ZERO: just pausing)
+var _glance_t := randf_range(3.0, 8.0)
+var _seen_vel := Vector3.ZERO  ## the player's velocity when last seen (where a runner went)
+var _stun_tol := 0.0  ## recent stuns (decays): each new one is shorter
+var _guard := 0.0  ## > 0: shrugs staggers off (just after a stun)
+var _rage := 0.0  ## 0..1: faster, quicker strikes, frenzied
+var _dodge := 0.0  ## > 0: seconds of dodge left
+var _dodge_vel := Vector3.ZERO
+var _dodge_roll := false  ## a dive roll (out of a gun's aim) rather than a backstep (out of a swing)
+var _dodge_cd := randf_range(1.0, 2.5)
+var _threat_was := ""
+var _pounce := -1.0  ## seconds into a pounce (gather, then leap), -1 = none
+var _leapt := false
+var _pounce_cd := randf_range(2.0, 4.0)
+var _combo := 0  ## follow-up strikes left in this flurry
+var _hit_from := Vector3.ZERO  ## direction the last blow came from (a death falls away from it)
 
 const TAKEDOWN_CONE := 100.0  ## degrees behind the enemy
 const THROW_TIME := 0.9
+const PACE_CAP := 5.3  ## m/s: a raging chaser stays just under Alex's sprint (escape costs stamina)
+const DOWN_POSES := ["kneel", "one_knee", "hands_ground", "sit_back", "side"]
+const HABIT_NOTES := {
+	"dodge": "They've learned you roll on cue. They'll hold their strikes, and follow up.",
+	"ranged": "They've learned you shoot from afar. They weave in and dive out of your aim.",
+	"stealth": "They've learned you sneak. Patrols check behind them.",
+	"hide": "They've learned you hide. They search the hiding spots first.",
+	"melee": "They've learned you fight up close. They step out of your swings and pounce back.",
+	"stun": "They've learned you stun them. Each stun wears off faster, and leaves them angrier.",
+}
+static var _local := {}  ## habits when there's no Game autoload (headless tests)
+static var _noted := {}  ## habit -> told the player already (re-armed once the habit fades)
 
 @onready var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
@@ -113,6 +154,38 @@ static func spawn(parent: Node, model_scene: String, pos: Vector3, yaw := 0.0, p
 	model.rotation.y = yaw
 	parent.add_child(e)
 	return e
+
+
+static func habits() -> Dictionary:
+	## The player's habits, 0..1, shared by every enemy. Kept in Game.run: saved with the game, kept
+	## through deaths and checkpoint reloads, fresh on a new run.
+	var g := G.game()
+	var run: Dictionary = g.run if g else _local
+	if not run.has("habits"):
+		run["habits"] = {}
+	for k in HABIT_NOTES:  # saves from before a habit existed get it fresh
+		if not run.habits.has(k):
+			run.habits[k] = 0.0
+	return run.habits
+
+
+static func learn(key: String, v: float, rate := 0.25) -> void:
+	## Moving average: recent behaviour counts most, so a player who changes style is re-learned. A habit
+	## that takes hold (>= 0.6) is told to the player once, again only after it has faded (< 0.35).
+	var h := habits()
+	h[key] = lerpf(h[key], v, rate)
+	if h[key] >= 0.6 and not _noted.get(key, false):
+		_noted[key] = true
+		var tree := Engine.get_main_loop() as SceneTree
+		var p := tree.get_first_node_in_group("player") if tree else null
+		if p and p.get("hud") and p.hud.has_method("note"):
+			p.hud.note(HABIT_NOTES[key], "THEY ADAPT", 4.5)
+	elif h[key] < 0.35:
+		_noted[key] = false
+
+
+func _exit_tree() -> void:
+	Snd.threat(false, self)
 
 
 func _ready() -> void:
@@ -166,11 +239,19 @@ func _physics_process(delta: float) -> void:
 	_t_state += delta
 	_cool = maxf(_cool - delta, 0.0)
 	_asthma_cd = maxf(_asthma_cd - delta, 0.0)
+	if state != State.STUNNED:  # recovers slowly, and only while free: stun after stun keeps getting shorter
+		_stun_tol = maxf(_stun_tol - delta * 0.1, 0.0)
+	_guard = maxf(_guard - delta, 0.0)
+	_dodge_cd = maxf(_dodge_cd - delta, 0.0)
+	_pounce_cd = maxf(_pounce_cd - delta, 0.0)
+	# rage cools off; a boss's never drops below how badly it's hurt
+	_rage = maxf(_rage - delta * 0.04, (1.0 - health / max_health) * 0.8 if boss else 0.0)
 	match state:
 		State.DEAD:
 			return
 		State.DOWN:
 			_stop(delta)
+			_downed_idle()
 		State.STUNNED:
 			_stun -= delta
 			_stop(delta)
@@ -178,6 +259,12 @@ func _physics_process(delta: float) -> void:
 			if _stun <= 0.0:
 				_anim.crouching = false
 				_set_state(State.CHASE)
+				# back up angry: shrugs off the next stagger for a while (longer against a stun-reliant player),
+				# and an agile one comes straight back with a pounce
+				_guard = (2.5 if boss else 1.4) * (1.0 + habits().stun)
+				_cool = 0.0
+				if agile:
+					_pounce_cd = 0.0
 		_:
 			if _player and _player.get("controls_enabled") == false:
 				_hold(delta)
@@ -185,11 +272,13 @@ func _physics_process(delta: float) -> void:
 				_think(delta)
 	move_and_slide()
 	_anim.speed = Vector2(velocity.x, velocity.z).length()
+	_anim.vertical = velocity.y
 
 
 func _hold(delta: float) -> void:
 	## Player out of control (cinematic, minigame, death fade): stand still, sense nothing, drop any windup.
 	_stop(delta)
+	_cancel_moves()
 	if _attack >= 0.0 or _throw >= 0.0:
 		_attack = -1.0
 		_throw = -1.0
@@ -236,6 +325,9 @@ func _think(delta: float) -> void:
 		if can_see_player():
 			_unseen = 0.0
 			_target = _player.global_position
+			_seen_vel = _player.velocity
+			if state in [State.PATROL, State.SUSPICIOUS]:
+				learn("stealth", 0.0, 0.1)  # walked into view: not sneaking this time
 			if state != State.CHASE:
 				_set_state(State.CHASE)
 	if state == State.CHASE and _player.global_position.x > give_up_x:
@@ -244,6 +336,12 @@ func _think(delta: float) -> void:
 	if _attack >= 0.0:
 		_do_attack(delta)
 		return
+	if _dodge > 0.0:
+		_do_dodge(delta)
+		return
+	if _pounce >= 0.0:
+		_do_pounce(delta)
+		return
 	if gas_thrower:
 		_gas_t -= delta
 		if _throw >= 0.0:
@@ -251,25 +349,49 @@ func _think(delta: float) -> void:
 			return
 	match state:
 		State.PATROL:
-			if _go(_target, walk_speed, delta) < 1.0:
+			_glance_t -= delta
+			if _glance_t <= 0.0:  # against a sneaky player: stop now and then and look behind
+				_glance_t = randf_range(3.0, 8.0)
+				if randf() < habits().stealth:
+					_wait = randf_range(1.0, 1.8)
+					_look = -_model.global_basis.z
+			if _wait > 0.0:
+				_wait -= delta
+				_stop(delta)
+				if _look != Vector3.ZERO:
+					_face(global_position + _look, delta, 5.0)
+			elif _go(_target, walk_speed, delta) < 1.0:
 				_patrol_i = (_patrol_i + 1) % patrol.size()
 				_target = patrol[_patrol_i]
+				if randf() < 0.35:  # not a metronome: sometimes linger at a waypoint
+					_wait = randf_range(0.5, 2.0)
+					_look = Vector3.ZERO
 		State.SUSPICIOUS:
 			if _go(_target, walk_speed * 1.3, delta) < 1.2 or _t_state > 10.0:
 				_set_state(State.SEARCH)
 		State.CHASE:
 			var d := global_position.distance_to(_player.global_position)
+			var pace := minf(run_speed * (1.15 + 0.35 * _rage), maxf(run_speed, PACE_CAP))
+			_frenzy(d < 8.0 and _rage > 0.35 and not boss and not ranged and _unseen < 1.0)
 			if _unseen > 5.0:  # lost them: search around the last known position
-				_set_state(State.SEARCH)
+				_lost_player()
+			elif agile and _try_dodge(d):
+				pass
 			elif gas_thrower and _gas_t <= 0.0 and _unseen < 0.5 and d < 16.0:
 				_gas(d, delta)
 			elif ranged and d > 4.0:
 				_bow(d, delta)
 			elif d < melee_range and _cool <= 0.0:
-				_attack = 0.0
+				_strike_start()
 				_face(_player.global_position, delta, 30.0)
+			elif agile and not ranged and _pounce_cd <= 0.0 and _unseen < 0.3 and d > 2.4 and d < 6.5 \
+					and is_on_floor():
+				_pounce = 0.0
+				_leapt = false
+			elif _unseen < 1.0:
+				_go(_player.global_position + _weave(d) + _flank(d), pace, delta)
 			else:
-				_go(_player.global_position if _unseen < 1.0 else _target, run_speed, delta)
+				_go(_target, pace, delta)
 		State.SEARCH:
 			if not _check.is_empty():
 				_check_spot(delta)
@@ -440,6 +562,30 @@ func _check_spot(delta: float) -> void:
 		_set_state(State.CHASE)
 
 
+func _lost_player() -> void:
+	## Out of sight for 5 s: guess by the player's habit (hide or run), then learn what they actually did.
+	_set_state(State.SEARCH)
+	if randf() < habits().hide:  # a hider: check the hiding spots nearest to where they vanished
+		var near: Array = _player.hidden_spots.filter(func(p: Vector3) -> bool: return p.distance_to(_target) < 12.0)
+		near.sort_custom(func(a: Vector3, b: Vector3) -> bool: return a.distance_to(_target) < b.distance_to(_target))
+		for p: Vector3 in near.slice(0, 2):
+			if not p in _check:
+				_check.append(p)
+	else:  # a runner: search ahead, along the way they were running
+		var v := Vector3(_seen_vel.x, 0.0, _seen_vel.z)
+		_target += v.normalized() * minf(v.length() * 2.0, 10.0)
+	learn("hide", 1.0 if _player.is_hidden() else 0.0, 0.3)
+
+
+func _weave(d: float) -> Vector3:
+	## Against a player who shoots from range: zigzag in rather than run straight down the sights.
+	if d < 5.0:
+		return Vector3.ZERO
+	var to := (_player.global_position - global_position).normalized()
+	var phase := float(get_instance_id() % 7)  # chasers in a pack don't weave in step
+	return Vector3(-to.z, 0.0, to.x) * sin(_t_state * 2.2 + phase) * minf(d * 0.4, 4.0) * habits().ranged
+
+
 func _on_hid(pos: Vector3) -> void:
 	if state in [State.DEAD, State.DOWN] or _unseen > 1.5:
 		return  # only spots it actually saw the player slip into
@@ -449,23 +595,179 @@ func _on_hid(pos: Vector3) -> void:
 	_spots.append(pos)
 
 
+func _strike_start(wind := -1.0) -> void:
+	## Begin an overhead strike. Default windup: jittered, quicker with rage, and against a player who rolls on
+	## cue sometimes held late so the roll comes early. Rollers and angry enemies get follow-up strikes.
+	_attack = 0.0
+	_frenzy(false)
+	if randf() < 0.45:
+		Snd.sfx("growl", global_position)
+	if wind > 0.0:
+		_windup_now = wind
+	else:
+		_windup_now = windup * randf_range(0.85, 1.2) * (1.0 - 0.25 * _rage)
+		if randf() < habits().dodge * 0.7:
+			_windup_now += randf_range(0.25, 0.55)
+	var chain: float = (0.45 if boss else 0.2) + 0.3 * _rage + 0.3 * float(habits().dodge)
+	_combo = (1 if randf() < chain else 0) + (1 if boss and randf() < chain * 0.5 else 0)
+
+
 func _do_attack(delta: float) -> void:
-	_stop(delta)
+	var to := _player.global_position - global_position
+	to.y = 0.0
+	# a boss, an angry one or a roller's hunter steps in while winding up instead of swinging at air
+	if _attack < 0.55 and to.length() > melee_range * 0.75 and (boss or _rage > 0.5 or habits().dodge > 0.5):
+		velocity.x = to.normalized().x * 2.4
+		velocity.z = to.normalized().z * 2.4
+	else:
+		_stop(delta)
 	var before := _attack
-	_attack += delta / (windup / 0.6) if _attack < 0.6 else delta / 0.35
+	_attack += delta / (_windup_now / 0.6) if _attack < 0.6 else delta / 0.35
 	_anim.attack = _attack
 	if _attack < 0.6:
 		_face(_player.global_position, delta, 6.0)
 	if before < 0.62 and _attack >= 0.62:
-		var to := _player.global_position - global_position
 		var fwd := _model.global_basis.z
 		if to.length() < melee_range + 0.5 and fwd.dot(to.normalized()) > 0.3:
-			if _player.hurt(melee_damage, global_position, mark_gain):
+			if _player.rolling_invulnerable():
+				learn("dodge", 1.0)
+			elif _player.hurt(melee_damage, global_position, mark_gain):
+				learn("dodge", 0.0)
 				struck_player.emit(self)
 	if _attack >= 1.0:
-		_attack = -1.0
 		_anim.attack = -1.0
-		_cool = 0.6
+		if _combo > 0 and not _player.dead:  # the follow-up comes fast, re-aimed at where Alex is now
+			var left := _combo - 1
+			_strike_start(windup * 0.5 * (1.0 - 0.2 * _rage))
+			_combo = left
+			return
+		_attack = -1.0
+		_cool = lerpf(0.6, 0.25, _rage)
+		learn("stun", 0.0, 0.04)  # a whole flurry went unanswered: not leaning on stuns right now
+
+
+func _threat(d: float) -> String:
+	## What Alex is about to do to this enemy: "aim" (a gun on it), "swing" (a blow coming that reaches it), "".
+	if d < 30.0 and _player.get("aiming"):
+		var cam: Camera3D = _player.get("camera")
+		var to := global_position + Vector3.UP * 1.2 - cam.global_position if cam else Vector3.ZERO
+		if cam and rad_to_deg((-cam.global_basis.z).angle_to(to)) < 6.0:
+			return "aim"
+	var st: float = _player.get("_strike_t") if _player.get("_strike_t") != null else -1.0
+	var pm: Node3D = _player.get("model")
+	if st >= 0.0 and st < 0.4 and d < 2.9 and pm \
+			and pm.global_basis.z.dot((global_position - _player.global_position).normalized()) > 0.4:
+		return "swing"
+	return ""
+
+
+func _try_dodge(d: float) -> bool:
+	## On a new threat, maybe dodge it: the more the player relies on that tactic, the likelier. A gun's aim gets
+	## a dive roll to the side, a swing a backstep (then a pounce straight back in). True if a dodge started.
+	var t := _threat(d)
+	var fresh := t != "" and t != _threat_was
+	_threat_was = t
+	if not fresh or _dodge_cd > 0.0 or not is_on_floor():
+		return false
+	var chance := (0.3 if boss else 0.15) + 0.55 * float(habits().ranged if t == "aim" else habits().melee) + 0.2 * _rage
+	if randf() >= chance:
+		return false
+	var away := global_position - _player.global_position
+	away.y = 0.0
+	away = away.normalized()
+	_dodge_roll = t == "aim"
+	if _dodge_roll:
+		_dodge_vel = Vector3(-away.z, 0.0, away.x) * (1.0 if randf() < 0.5 else -1.0) * 6.5
+		_dodge = 0.5
+	else:
+		_dodge_vel = (away + Vector3(-away.z, 0.0, away.x) * randf_range(-0.5, 0.5)).normalized() * 6.0
+		_dodge = 0.3
+		_pounce_cd = 0.0  # ...and straight back in
+	_dodge_cd = randf_range(1.8, 3.0) if boss else randf_range(2.5, 4.0)
+	return true
+
+
+func _do_dodge(delta: float) -> void:
+	_dodge -= delta
+	velocity.x = _dodge_vel.x
+	velocity.z = _dodge_vel.z
+	if _dodge_roll:  # a dive roll along the dodge, then turn back to Alex
+		_face(global_position + _dodge_vel, delta, 30.0)
+		_anim.roll = clampf(1.0 - _dodge / 0.5, 0.0, 0.999)
+	else:  # a hop back, leaning away, eyes on him
+		_face(_player.global_position, delta, 20.0)
+		_anim.flinch = maxf(_anim.flinch, 0.45)
+	if _dodge <= 0.0:
+		_dodge = 0.0
+		_anim.roll = -1.0
+		_stop(delta)
+
+
+func _do_pounce(delta: float) -> void:
+	## Gather (crouch, eyes on the prey) for a beat, leap at where Alex is going, strike quick on landing.
+	_pounce += delta
+	if not _leapt:
+		_stop(delta)
+		_anim.crouching = true
+		_face(_player.global_position, delta, 14.0)
+		if _pounce < 0.25:
+			return
+		_leapt = true
+		_anim.crouching = false
+		_anim.airborne = true
+		var to: Vector3 = _player.global_position + _player.velocity * 0.3 - global_position
+		to.y = 0.0
+		var reach := clampf(to.length() - melee_range * 0.6, 0.0, 6.0)
+		velocity = to.normalized() * reach / 0.6
+		velocity.y = 3.0  # ~0.6 s in the air
+		return
+	_face(_player.global_position, delta, 10.0)
+	if (is_on_floor() and _pounce > 0.45) or _pounce > 1.3:
+		_anim.airborne = false
+		_pounce = -1.0
+		_pounce_cd = randf_range(3.5, 6.0) * (0.6 if boss else 1.0) * (1.0 - 0.4 * _rage)
+		velocity.x *= 0.2
+		velocity.z *= 0.2
+		_strike_start(windup * 0.4)
+
+
+func _cancel_moves() -> void:
+	## Stunned / frozen / reset mid-dodge or mid-pounce: back on its feet, nothing in flight.
+	_dodge = 0.0
+	_pounce = -1.0
+	_combo = 0
+	_anim.roll = -1.0
+	_anim.airborne = false
+	if _anim.crouching and state not in [State.STUNNED, State.DOWN]:
+		_anim.crouching = false
+	_frenzy(false)
+
+
+func _flank(d: float) -> Vector3:
+	## Packs spread round the player instead of queueing up one behind the other: each chaser aims for its own
+	## side (by instance), merging back onto the player in the last couple of metres.
+	if boss or d < 2.0:
+		return Vector3.ZERO
+	var to := (_player.global_position - global_position).normalized()
+	var slot := float(get_instance_id() % 5) - 2.0
+	return Vector3(-to.z, 0.0, to.x) * slot * 1.2 * clampf((d - 2.0) / 4.0, 0.0, 1.0)
+
+
+func _frenzy(on: bool) -> void:
+	## Raging up close: stabbing, clawing, hunched (HumanoidAnim "frenzy"); never over another gesture.
+	if on and _anim.gesture == "":
+		_anim.gesture = "frenzy"
+	elif not on and _anim.gesture == "frenzy":
+		_anim.gesture = ""
+
+
+func _downed_idle() -> void:
+	## Kneeling boss: breathes hard (the pose does that) and watches Alex when he's near.
+	if not _player:
+		return
+	var local := _model.global_basis.inverse() * (_player.global_position - global_position)
+	var near := local.length() < 9.0
+	_anim.look = _anim.look.lerp(Vector2(clampf(atan2(local.x, local.z), -1.0, 1.0), -0.25) if near else Vector2.ZERO, 0.05)
 
 
 func _go(p: Vector3, speed: float, delta: float) -> float:
@@ -505,8 +807,12 @@ func _face(p: Vector3, delta: float, rate: float) -> void:
 
 
 func _set_state(s: State) -> void:
+	var was := state
 	state = s
 	_t_state = 0.0
+	if s == State.CHASE and was != State.CHASE and is_physics_processing():
+		Snd.sfx("enemy_alert" if randf() < 0.5 else "growl", global_position)
+	Snd.threat(s == State.CHASE and is_physics_processing(), self)
 	if s == State.SEARCH and not _spots.is_empty():
 		_check = _spots.duplicate()
 		_check.sort_custom(func(a: Vector3, b: Vector3) -> bool:
@@ -549,6 +855,13 @@ func hit(dmg: float, point: Vector3, flare := false) -> void:
 		return
 	if state == State.DEAD:
 		return
+	if _player and point != global_position:  # fire / scripted hits land at the enemy's origin: not the player's aim
+		learn("ranged", 1.0 if _player.global_position.distance_to(global_position) > 7.0 else 0.0, 0.15)
+		var swung: bool = _player.get("_strike_t") != null and float(_player.get("_strike_t")) >= 0.0
+		learn("melee", 1.0 if swung else 0.0, 0.15 if swung else 0.08)
+		_hit_from = (_player.global_position - global_position).normalized()
+	_rage = minf(_rage + (0.06 if boss else 0.12), 1.0)
+	Snd.sfx("enemy_hit", global_position)
 	if point.y - global_position.y > 1.5 * _model.scale.y:
 		dmg *= 2.0  # headshot
 	if state == State.STUNNED or _calling > 0.0:
@@ -558,14 +871,14 @@ func hit(dmg: float, point: Vector3, flare := false) -> void:
 	if state != State.STUNNED:
 		dmg *= armor
 	if flare and flare_stun > 0.0:
-		stun(flare_stun)
+		stagger(flare_stun)
 	_anim.flinch = 1.0
 	if state != State.STUNNED:
 		_target = _player.global_position
 		_unseen = 0.0
 		_set_state(State.CHASE)
 	if invulnerable:
-		stun(0.8)
+		stagger(0.8)
 		return
 	_take(dmg)
 
@@ -579,8 +892,10 @@ func _take(dmg: float) -> void:
 			_set_state(State.DOWN)
 			_attack = -1.0
 			_throw = -1.0
+			_cancel_moves()
 			_end_call(false)  # lit for the spare / kill scene
 			_anim.attack = -1.0
+			_anim.down_pose = DOWN_POSES.pick_random()  # beaten, but never twice the same way for sure
 			_anim.crouching = true
 			_anim.aim = 0.0
 			downed.emit(self)
@@ -601,6 +916,7 @@ func can_takedown(by: Node3D) -> bool:
 
 func takedown() -> void:
 	## Marked One: dies. Boss: 25% max health (× shadow_bonus) + 2 s stun. Invulnerable: stun only.
+	learn("stealth", 1.0)
 	if not (boss or invulnerable):
 		kill()
 		return
@@ -627,12 +943,31 @@ func asthma_attack() -> void:
 	stun(asthma_stun)
 
 
+func stagger(t: float) -> bool:
+	## A stun the player caused (melee blow, flare, fire): resisted, so no enemy can be stun-locked. Back-to-back
+	## stuns get shorter (more so against a player who leans on them), a guard window after each stun shrugs the
+	## next one off (a flinch), a boss's committed swing can't be knocked out by a light blow, and every stun
+	## angers it. Scripted stuns (bells, gas, light, cutscenes) use stun() and always land. True if stunned.
+	if state in [State.DEAD, State.DOWN, State.STUNNED] or not is_physics_processing():
+		return false  # already reeling: a stun can't be stacked onto (or held on) a stunned enemy
+	learn("stun", 1.0, 0.12)
+	_rage = minf(_rage + (0.25 if boss else 0.15), 1.0)
+	if _guard > 0.0 or (boss and _attack >= 0.3 and t < 1.0):
+		_anim.flinch = maxf(_anim.flinch, 0.5)
+		return false
+	var k := 1.0 / (1.0 + _stun_tol * (1.0 + float(habits().stun)))
+	_stun_tol += 1.5 if boss else 1.0
+	stun(t * k)
+	return true
+
+
 func stun(t: float) -> void:
 	if state in [State.DEAD, State.DOWN] or not is_physics_processing():
 		return
 	_stun = maxf(_stun, t)
 	_attack = -1.0
 	_throw = -1.0
+	_cancel_moves()
 	_end_call()
 	_anim.attack = -1.0
 	_anim.aim = 0.0
@@ -643,29 +978,61 @@ func stun(t: float) -> void:
 func kill() -> void:
 	if state == State.DEAD:
 		return
+	var was_down := state == State.DOWN
 	_set_state(State.DEAD)
+	Snd.sfx("enemy_death", global_position)
 	_end_call(false)
+	_cancel_moves()
 	remove_from_group("enemies")
 	collision_layer = 0
 	velocity = Vector3.ZERO
 	_anim.attack = -1.0
-	_anim.crouching = false
 	_anim.aim = 0.0
 	_anim.speed = 0.0
-	var tw := create_tween()
-	tw.tween_property(_model, "rotation:x", -PI / 2.0, 0.5).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	tw.parallel().tween_property(_model, "position:y", 0.25, 0.5)
-	tw.tween_callback(func() -> void: _anim.set_process(false))
+	_anim.look = Vector2.ZERO
+	_fall(was_down)
 	if drop.is_valid():
 		drop.call(global_position)
 	died.emit(self)
 	get_tree().create_timer(30.0).timeout.connect(queue_free)
 
 
+func _fall(was_down: bool) -> void:
+	## The body goes down away from the killing blow (blown back, pitched forward, spun to the side) or folds
+	## at the knees first, never quite the same twice. A kneeling boss topples from its kneel.
+	var from := _model.global_basis.inverse() * _hit_from  # model space: +z = the blow came from in front
+	var kind: String
+	if was_down:
+		kind = {"sit_back": "back", "hands_ground": "front"}.get(_anim.down_pose, ["back", "side", "front"].pick_random())
+	else:
+		var r := randf()
+		kind = "crumple" if r < 0.25 else ("side" if r < 0.45 else ("back" if from.z >= 0.0 else "front"))
+		_anim.crouching = false
+	var side := signf(from.x) if absf(from.x) > 0.2 else (1.0 if randf() < 0.5 else -1.0)
+	var tw := create_tween()
+	if kind == "crumple":  # knees give first, then the rest pitches over
+		_anim.down_pose = ["kneel", "hands_ground"].pick_random()
+		_anim.crouching = true
+		tw.tween_interval(0.45)
+		kind = "front" if randf() < 0.6 else "side"
+	var t := randf_range(0.45, 0.65)
+	var rot := {"back": Vector3(-PI / 2.0, 0.0, 0.0), "front": Vector3(PI / 2.0, 0.0, 0.0),
+		"side": Vector3(0.0, 0.0, -side * PI / 2.0)}[kind] as Vector3
+	var lift := {"back": 0.13, "front": 0.15, "side": 0.18}[kind] as float
+	var twist := randf_range(-0.5, 0.5) + (side * 0.8 if kind == "side" else 0.0)
+	tw.tween_property(_model, "rotation", _model.rotation + rot + Vector3(0.0, twist, 0.0), t) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(_model, "position:y", lift, t)
+	tw.tween_property(_model, "rotation:x", _model.rotation.x + rot.x * 0.94, 0.12)  # a small bounce as it lands
+	tw.tween_property(_model, "rotation:x", _model.rotation.x + rot.x, 0.1)
+	tw.tween_callback(func() -> void: _anim.set_process(false))
+
+
 func lose_track(p: Vector3) -> void:
 	## Tension director: after a catch the hunter wanders off to search somewhere else.
 	_attack = -1.0
 	_anim.attack = -1.0
+	_cancel_moves()
 	_target = p
 	_unseen = 99.0
 	_set_state(State.SEARCH)
@@ -684,6 +1051,13 @@ func reset_to(pos: Vector3) -> void:
 	_end_call()
 	_call_t = call_interval
 	_gas_t = 2.5
+	_wait = 0.0
+	_cancel_moves()
+	_rage = 0.0
+	_stun_tol = 0.0
+	_guard = 0.0
+	_anim.down_pose = ""
+	_anim.look = Vector2.ZERO
 	_spots.clear()
 	_check.clear()
 	_set_state(State.PATROL)

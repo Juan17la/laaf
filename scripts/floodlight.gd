@@ -25,6 +25,7 @@ var _on := 0.0
 var _cool := 0.0
 var _tick := 0.0
 var _busy := false
+var _gen_snd: Node
 
 
 static func make(parent: Node, pos: Vector3, aim: Vector3, hud: Node) -> Floodlight:
@@ -125,6 +126,7 @@ func _throw(by: Node) -> void:
 	if ok:
 		_on = ON_TIME
 		_tick = 0.0
+		_gen_snd = Snd.attach(self, "generator", 3.0)
 		lit.emit()
 	_refresh()
 
@@ -147,6 +149,8 @@ func _physics_process(delta: float) -> void:
 				if e.light_stun():
 					stunned.emit(e)
 	if _on <= 0.0:  # the bulb pops
+		Snd.stop(_gen_snd)
+		Snd.sfx("glass", global_position, -4.0)
 		_cool = COOL
 		_beam.light_energy = 0.0
 		_lens.emission_energy_multiplier = 0.0

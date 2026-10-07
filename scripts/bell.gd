@@ -103,6 +103,8 @@ func _impact() -> void:
 		elif d < DEAF_R and e.has_method("stun"):
 			e.stun(DEAF_STUN)
 	get_tree().call_group("enemies", "hear", global_position, 40.0)
+	Snd.sfx("bell", global_position, 6.0)
+	Snd.sfx("glass", global_position, -8.0)
 	var flash := OmniLight3D.new()  # sparks off the flagstones
 	flash.light_color = Color(1.0, 0.8, 0.4)
 	flash.light_energy = 4.0

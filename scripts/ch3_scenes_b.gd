@@ -247,6 +247,12 @@ func the_harvest(allies: Dictionary) -> void:
 	await hud.subtitle("Shepherd", "Only my boy opens the cages. It's nearly three.", 2.6)
 	# the floor shakes: it's coming home down the quarry road, dragging a Taken by the ankle
 	var harv := _harv_actor(Vector3(2, 0, -152), PI)
+	var pit := Chapter3Director.HARV_SPAWN  # the pit gets a key light and two lanterns (they stay on for the fight)
+	d.key_light(pit + Vector3(0, 7.0, 0), Color(1.0, 0.7, 0.4), 6.0, 28.0, pit, 55.0)
+	d.key_light(pit + Vector3(-9, 2.4, 4), Color(1.0, 0.75, 0.45), 1.5, 8.0)
+	d.key_light(pit + Vector3(9, 2.4, -4), Color(1.0, 0.75, 0.45), 1.5, 8.0)
+	Snd.stinger("reveal", -8.0)
+	Snd.attach(harv, "harvester", -2.0)
 	var taken := d.actor(MARKED[0], Vector3(2, 0, -150), 0.0)
 	_drag(harv, taken)
 	var steps := harv.walk_to(Chapter3Director.HARV_SPAWN, 1.8)

@@ -97,6 +97,7 @@ func _process(delta: float) -> void:
 			tension = 0.0
 			_armed = false  # release between pins
 			_status = "CLICK"
+			Snd.sfx("pick_set")
 			if _cur == pins:
 				_finish(true, "UNLOCKED")
 	else:
@@ -113,11 +114,14 @@ func _break() -> void:
 	_armed = false
 	_height.fill(0.0)
 	_status = "THE PICK SNAPPED"
+	Snd.sfx("pick_snap")
 	if picks <= 0:
 		_finish(false, "OUT OF PICKS")
 
 
 func _finish(won: bool, text: String) -> void:
+	if won:
+		Snd.sfx("pick_open")
 	_won = won
 	_status = text
 	_end_t = 0.0 if text != "" else SHOW  # a quit skips straight to the fade

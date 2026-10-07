@@ -65,6 +65,8 @@ func hit(_dmg: float, _point: Vector3, _flare := false) -> void:
 	flames.position.y = 0.8
 	add_child(flames)
 	get_tree().call_group("enemies", "hear", global_position, 25.0)
+	Snd.sfx("gun_flare", global_position, -4.0)
+	Snd.attach(self, "hiss", -2.0)
 
 
 func _physics_process(delta: float) -> void:
@@ -76,8 +78,8 @@ func _physics_process(delta: float) -> void:
 		_tick = 0.5
 		for n in get_tree().get_nodes_in_group("enemies") + get_tree().get_nodes_in_group("player"):
 			if n.global_position.distance_to(global_position) < RADIUS:
-				if n.has_method("stun") and n.flare_stun > 0.0:
-					n.stun(n.flare_stun)
+				if n.has_method("stagger") and n.flare_stun > 0.0:
+					n.stagger(n.flare_stun)
 				if n.has_method("hurt"):
 					n.hurt(8.0, global_position)
 				elif n.has_method("hit"):

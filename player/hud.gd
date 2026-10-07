@@ -1,6 +1,6 @@
 extends CanvasLayer
 ## Player HUD (gameplay.md §10): health/stamina, Mark meter, gun + ammo, crosshair and hit markers,
-## objective, interaction prompt, subtitles (no audio yet: every line is on screen), banners
+## objective, interaction prompt, subtitles (every line is on screen and babbled by Snd.voice), banners
 ## (DOUBLE TAP, chapter cards), boss bar, fades. Zone areas call show_zone via the "hud" group.
 ## Chapter 2: clock, QTE (mash prompt), gas mask filter bar + mask vignette, bottle count, takedown prompt.
 ## Chapter 3: the item belt line (bottles / smoke cans / tea).
@@ -43,6 +43,7 @@ var _boss: Control
 var _boss_fill: ColorRect
 var _boss_name: Label
 var _fade: ColorRect
+var _bars: Array[ColorRect] = []
 var _hurt: ColorRect
 var _banner_tw: Tween
 var _skip := false
@@ -177,6 +178,11 @@ func _ready() -> void:
 	_boss.add_child(_boss_name)
 	_fade = _rect(Color(0, 0, 0, 0), Control.PRESET_FULL_RECT)
 	_root.move_child(_fade, _sub_panel.get_index())  # black fades sit under subtitles and banners
+	for top in [true, false]:  # cinematic letterbox bars, closed by default
+		var bar := _rect(Color.BLACK, Control.PRESET_TOP_WIDE if top else Control.PRESET_BOTTOM_WIDE)
+		_root.move_child(bar, _sub_panel.get_index())
+		_bars.append(bar)
+	letterbox(false, 0.0)
 
 
 func _rect(c: Color, preset: int) -> ColorRect:
@@ -352,6 +358,8 @@ func _on_interacted() -> void:
 # ------------------------------------------------------------------ API used by player / chapters
 
 func show_zone(zone_name: String) -> void:
+	if not player.controls_enabled:
+		return  # zone volumes fire as cinematics teleport the stand-in: no stale titles over a shot
 	if zone_label.text == zone_name and zone_label.modulate.a > 0.0:
 		return
 	zone_label.text = zone_name
@@ -388,6 +396,7 @@ func note(text: String, title := "", time := 3.5) -> void:
 
 
 func _slip(text: String, title: String, time: float) -> void:
+	Snd.sfx("save" if text.begins_with("Saved") else "notify", null, -4.0)
 	var slip := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = PAPER
@@ -475,6 +484,7 @@ func _draw_weapons() -> void:
 func banner(text: String, color := Color.WHITE, hold := 1.5) -> void:
 	if _banner_tw:
 		_banner_tw.kill()
+	Snd.caption(text)
 	_banner.text = text
 	_banner.add_theme_color_override("font_color", color)
 	_banner.modulate.a = 0.0
@@ -485,9 +495,27 @@ func banner(text: String, color := Color.WHITE, hold := 1.5) -> void:
 
 
 func boss_bar(title: String, frac: float) -> void:
+	if (frac >= 0.0) != _boss.visible:  # the fight starts / ends
+		if frac >= 0.0:
+			Snd.stinger("boss", -12.0)
+			Snd.push_music("boss", 0.8)
+		else:
+			Snd.pop_music(3.0)
 	_boss.visible = frac >= 0.0
 	_boss_name.text = title
 	_boss_fill.size.x = 240.0 * clampf(frac, 0.0, 1.0)
+
+
+func letterbox(on: bool, time := 0.7) -> void:
+	## Cinematic bars (6% of the height each) slide in / out.
+	var h := 22.0 if on else 0.0
+	for i in _bars.size():
+		var prop := "offset_bottom" if i == 0 else "offset_top"
+		var to := h if i == 0 else -h
+		if time <= 0.0:
+			_bars[i].set(prop, to)
+		else:
+			create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT).tween_property(_bars[i], prop, to, time)
 
 
 func fade(alpha: float, time := 0.6) -> Signal:
@@ -499,18 +527,21 @@ func fade(alpha: float, time := 0.6) -> Signal:
 func subtitle(speaker: String, text: String, time := -1.0) -> void:
 	## Coroutine: shows one line and returns when it's done (or skipped with Enter / E).
 	if time < 0.0:
-		time = clampf(1.2 + text.length() * 0.055, 2.0, 7.0)
+		time = clampf(1.1 + text.length() * 0.055, 1.6, 6.5)
 	var c: Color = SPEAKERS.get(speaker, Color.WHITE)
-	if speaker == "":  # narration / sound captions
+	if speaker == "":  # narration / sound captions: the ones that name a sound get it
+		Snd.caption(text)
 		_sub.text = "[i]%s[/i]" % text
 	else:
 		_sub.text = "[b][color=#%s]%s:[/color][/b] %s" % [c.to_html(false), speaker.to_upper(), text]
 	_sub_panel.visible = true
 	_skip = false
+	Snd.voice(speaker, text, time)
 	var left := time
 	while left > 0.0 and not (_skip and left < time - 0.3):
 		await get_tree().process_frame
 		left -= get_process_delta_time()
+	Snd.stop_voice()
 	_sub_panel.visible = false
 
 

@@ -135,6 +135,7 @@ func moth_intro() -> void:
 	## Ends: player at DOCK_STAND (+0.05) facing +X, controls on, faded in, clock 09:00.
 	d.cinematic(true)
 	await hud.fade(1.0, 0.8)
+	d.mood("overcast", 0.1)  # 09:00: grey daylight in the fog, not midnight
 	d.player.global_position = DOCK_STAND + Vector3.UP * 0.05
 	var alex := d.stand_in(Vector3(2.0, 0.05, 116.2), -PI / 2.0)
 	var elena := d.actor(ELENA, Vector3(-10.5, 0.05, 116.4), -PI / 2.0)

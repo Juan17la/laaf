@@ -1,3 +1,21 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Godot export / mono
+.mono/
+*.translation
+export_presets.cfg
+export.cfg
+
+# Python
+__pycache__/
+*.pyc
+
+# Local tooling / OS / editor
+.claude/
+.codegraph/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
